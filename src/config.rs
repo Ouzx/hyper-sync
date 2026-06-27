@@ -81,7 +81,7 @@ pub fn resolve_layout_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(feature = "screen")]
-fn dirs_config() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -90,6 +90,41 @@ fn dirs_config() -> PathBuf {
                 .unwrap_or_else(|_| PathBuf::from(".config"))
         })
         .join("hyper-sync")
+}
+
+#[cfg(feature = "screen")]
+fn dirs_config() -> PathBuf {
+    config_dir()
+}
+
+#[cfg(feature = "screen")]
+pub fn portal_token_path() -> PathBuf {
+    config_dir().join("restore-token")
+}
+
+#[cfg(feature = "screen")]
+pub fn load_portal_token() -> Option<String> {
+    let path = portal_token_path();
+    let token = std::fs::read_to_string(&path).ok()?;
+    let token = token.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+#[cfg(feature = "screen")]
+pub fn save_portal_token(token: &str) -> anyhow::Result<()> {
+    let path = portal_token_path();
+    std::fs::create_dir_all(path.parent().unwrap())
+        .with_context(|| format!("create {}", path.parent().unwrap().display()))?;
+    std::fs::write(&path, token).with_context(|| format!("write {}", path.display()))
+}
+
+#[cfg(feature = "screen")]
+pub fn clear_portal_token() -> anyhow::Result<()> {
+    let path = portal_token_path();
+    if path.exists() {
+        std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "screen")]

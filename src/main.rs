@@ -69,6 +69,8 @@ enum Commands {
         monitor: u32,
         #[arg(long, default_value = "config/layout.toml")]
         layout: PathBuf,
+        #[arg(long, help = "Clear saved portal permission and re-prompt")]
+        forget_portal: bool,
     },
 }
 
@@ -123,6 +125,7 @@ fn main() -> anyhow::Result<()> {
             fps,
             monitor,
             layout,
+            forget_portal,
         } => {
             #[cfg(feature = "screen")]
             {
@@ -141,11 +144,12 @@ fn main() -> anyhow::Result<()> {
                     fps,
                     monitor,
                     brightness,
+                    forget_portal,
                 )
             }
             #[cfg(not(feature = "screen"))]
             {
-                let _ = (port, leds, brightness, fps, monitor, layout);
+                let _ = (port, leds, brightness, fps, monitor, layout, forget_portal);
                 anyhow::bail!(
                     "screen mode requires building with --features screen (needs pipewire-devel + gcc)"
                 )

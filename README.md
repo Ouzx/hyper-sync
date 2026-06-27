@@ -25,11 +25,16 @@ Build without screen capture (solid/candle/off only):
 cargo build --release
 ```
 
+
+
 ## Usage
 
 ```bash
-# Screen edge sync (portal permission prompt on first run)
+# Screen edge sync — portal dialog on first run only
 hyper-sync screen --port /dev/ttyUSB0 --leds 65 --fps 30 --brightness 0.8
+
+# Re-pick monitor / re-grant permission
+hyper-sync screen --port /dev/ttyUSB0 --leds 65 --forget-portal
 
 # Solid color
 hyper-sync solid --port /dev/ttyUSB0 --leds 65 --color ff0000 --brightness 0.8
@@ -40,6 +45,17 @@ hyper-sync candle --port /dev/ttyUSB0 --leds 65
 # All off
 hyper-sync off --port /dev/ttyUSB0 --leds 65
 ```
+
+
+
+### Screen capture permission
+
+On first run, the portal asks which monitor to share. Allow persistence if prompted — hyper-sync saves a restore token to `~/.config/hyper-sync/restore-token` and reuses it on later runs (no dialog).
+
+- Re-pick a monitor: `--forget-portal`
+- Revoke in system settings (KDE: Settings → Privacy → Screen Sharing)
+
+
 
 ### Layout
 

@@ -19,7 +19,7 @@ use pw::types::ObjectType;
 
 use crate::capture::negotiate;
 use crate::capture::sample;
-use crate::config::{DeviceConfig, EdgeZone, LayoutConfig};
+use crate::config::{self, DeviceConfig, EdgeZone, LayoutConfig};
 use crate::effects::solid::scale_rgb_buf;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
@@ -42,7 +42,6 @@ struct NodeInfo {
     id: u32,
     label: String,
     target: Option<String>,
-    screencast: bool,
 }
 
 #[derive(Default)]
@@ -62,21 +61,14 @@ impl RegistryScan {
             id,
             label,
             target: target_from_props(props),
-            screencast: is_screencast_source(props),
         });
     }
 
-    fn resolve(&self) -> Option<String> {
-        if let Some(node) = self.nodes.iter().find(|n| n.id == self.portal_node_id) {
-            return node.target.clone();
-        }
-        if let Some(node) = self.nodes.iter().find(|n| n.screencast) {
-            return node.target.clone();
-        }
-        if self.nodes.len() == 1 {
-            return self.nodes[0].target.clone();
-        }
-        None
+    fn portal_target(&self) -> Option<String> {
+        self.nodes
+            .iter()
+            .find(|n| n.id == self.portal_node_id)
+            .and_then(|n| n.target.clone())
     }
 
     fn matched_portal_id(&self) -> bool {
@@ -89,11 +81,6 @@ fn target_from_props(props: &DictRef) -> Option<String> {
         .get("object.serial")
         .or_else(|| props.get("node.name"))
         .map(str::to_string)
-}
-
-fn is_screencast_source(props: &DictRef) -> bool {
-    props.get("media.class") == Some("Video/Source")
-        || props.get("media.role") == Some("Screen")
 }
 
 fn wait_for_registry_target(
@@ -120,7 +107,7 @@ fn wait_for_registry_target(
             };
             let mut s = scan_reg.borrow_mut();
             s.note_node(global.id, props);
-            if s.resolve().is_some() {
+            if s.matched_portal_id() {
                 unsafe { pw::sys::pw_main_loop_quit(mainloop_ptr) };
             }
         })
@@ -131,19 +118,16 @@ fn wait_for_registry_target(
     let _core_listener = core
         .add_listener_local()
         .done(move |id, seq| {
-            if id == PW_ID_CORE && seq == pending && scan_sync.borrow().resolve().is_some() {
+            if id == PW_ID_CORE && seq == pending && scan_sync.borrow().matched_portal_id() {
                 unsafe { pw::sys::pw_main_loop_quit(mainloop_ptr) };
             }
         })
         .register();
 
-    let scan_timeout = Rc::clone(&scan);
     let _timer = mainloop.loop_().add_timer(move |_| {
-        if scan_timeout.borrow().resolve().is_none() {
-            unsafe { pw::sys::pw_main_loop_quit(mainloop_ptr) };
-        }
+        unsafe { pw::sys::pw_main_loop_quit(mainloop_ptr) };
     });
-    let _ = _timer.update_timer(Some(Duration::from_secs(5)), None);
+    let _ = _timer.update_timer(Some(Duration::from_secs(10)), None);
 
     mainloop.run();
 
@@ -162,9 +146,9 @@ fn wait_for_registry_target(
         eprintln!("  node {} ({})", node.id, node.label);
     }
 
-    scan.resolve().with_context(|| {
+    scan.portal_target().with_context(|| {
         format!(
-            "no screencast node within 5s for portal id {portal_node_id} ({} nodes seen)",
+            "portal screencast node {portal_node_id} not seen within 10s ({} other nodes)",
             scan.nodes.len()
         )
     })
@@ -176,6 +160,7 @@ pub fn run(
     fps: u32,
     monitor: u32,
     brightness: f32,
+    forget_portal: bool,
 ) -> anyhow::Result<()> {
     pw::init();
 
@@ -189,7 +174,7 @@ pub fn run(
     );
 
     let rt = tokio::runtime::Runtime::new().context("tokio runtime")?;
-    let (portal_stream, pw_fd) = rt.block_on(open_portal(monitor))?;
+    let (portal_stream, pw_fd) = rt.block_on(open_portal(monitor, forget_portal))?;
 
     let (init_w, init_h) = portal_stream.size().unwrap_or((1920, 1080));
     let width = Arc::new(AtomicU32::new(init_w.max(1) as u32));
@@ -341,8 +326,20 @@ pub fn run(
 
 async fn open_portal(
     monitor: u32,
+    forget_portal: bool,
 ) -> anyhow::Result<(ashpd::desktop::screencast::Stream, std::os::fd::OwnedFd)> {
-    eprintln!("requesting screen capture permission…");
+    if forget_portal {
+        config::clear_portal_token()?;
+        eprintln!("cleared saved portal permission");
+    }
+
+    let saved_token = config::load_portal_token();
+    if saved_token.is_some() {
+        eprintln!("restoring screencast session…");
+    } else {
+        eprintln!("requesting screen capture permission…");
+    }
+
     let proxy = Screencast::new()
         .await
         .context("create ScreenCast proxy")?;
@@ -357,8 +354,8 @@ async fn open_portal(
             CursorMode::Embedded,
             SourceType::Monitor.into(),
             false,
-            None,
-            PersistMode::Application,
+            saved_token.as_deref(),
+            PersistMode::ExplicitlyRevoked,
         )
         .await
         .context("select_sources")?
@@ -370,6 +367,16 @@ async fn open_portal(
         .await
         .context("start screencast")?;
     let response = request.response().context("start response")?;
+
+    if let Some(token) = response.restore_token() {
+        config::save_portal_token(token)?;
+        if saved_token.is_some() {
+            eprintln!("screencast session restored");
+        } else {
+            eprintln!("screencast permission saved");
+        }
+    }
+
     let streams = response.streams();
     let stream = streams
         .get(monitor as usize)
