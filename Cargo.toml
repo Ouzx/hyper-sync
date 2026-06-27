@@ -1,0 +1,28 @@
+[package]
+name = "hyper-sync"
+version = "0.1.0"
+edition = "2021"
+description = "Low-latency Skydimo LED sync for Wayland"
+license = "MIT"
+
+[[bin]]
+name = "hyper-sync"
+path = "src/main.rs"
+
+[features]
+default = []
+screen = ["dep:ashpd", "dep:pipewire", "dep:tokio"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serialport = "4"
+ashpd = { version = "0.9", default-features = false, features = ["tokio"], optional = true }
+pipewire = { version = "0.10", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+[profile.release]
+lto = true
+codegen-units = 1

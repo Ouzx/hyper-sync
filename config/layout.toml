@@ -1,0 +1,18 @@
+led_count = 65
+origin = "bottom_right"
+direction = "counter_clockwise"
+
+[[segments]]
+name = "right"
+count = 17
+edge = "right"
+
+[[segments]]
+name = "top"
+count = 31
+edge = "top"
+
+[[segments]]
+name = "left"
+count = 17
+edge = "left"

@@ -1,0 +1,15 @@
+[Unit]
+Description=hyper-sync screen sync
+After=pipewire.service xdg-desktop-portal.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=__NV_PRIME_RENDER_OFFLOAD=1
+Environment=__GLX_VENDOR_LIBRARY_NAME=nvidia
+ExecStart=%h/.local/bin/hyper-sync screen --port /dev/ttyUSB0 --leds 65 --fps 30
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
