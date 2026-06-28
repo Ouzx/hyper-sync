@@ -19,7 +19,7 @@ pub fn modulate_rgb(
     match mode {
         SoundMode::Off => {}
         SoundMode::Level => {
-            let gain = brightness_gain(base_brightness, react, sensitivity, snap.level());
+            let gain = brightness_gain(base_brightness, react, sensitivity, snap.bass_level());
             apply_gain(rgb, gain);
         }
         SoundMode::Balance => {
@@ -30,7 +30,7 @@ pub fn modulate_rgb(
             let right_w = (0.5 + side).clamp(0.0, 1.0);
             let left_w = (0.5 - side).clamp(0.0, 1.0);
             let center_w = (1.0 - side.abs()).clamp(0.0, 1.0);
-            let level = snap.level();
+            let level = snap.bass_level();
             for i in 0..n {
                 let pan = match led_zone(i, n) {
                     LedZone::Right => right_w,

@@ -21,6 +21,8 @@ const FRAME_BYTES: usize = CHANNELS * std::mem::size_of::<f32>();
 const FRAME_DT: f32 = 1.0 / SAMPLE_RATE;
 const PAREC_LATENCY_MS: &str = "20";
 const PAREC_PROCESS_MS: &str = "5";
+// ponytail: ~100Hz one-pole — hats/treble pass less into brightness boost.
+const BASS_LP_ALPHA: f32 = 2.0 * std::f32::consts::PI * 100.0 / SAMPLE_RATE;
 
 pub struct AudioMonitor {
     snapshot: Arc<AudioSnapshot>,
@@ -114,8 +116,10 @@ fn monitor_device(sink: &str) -> String {
 
 struct CaptureState {
     level_env: Envelope,
+    bass_env: Envelope,
     left_env: Envelope,
     right_env: Envelope,
+    lp_mono: f32,
     spec_env: [Envelope; SPECTRUM_BANDS],
     last_spectrum: Instant,
     spectrum: [f32; SPECTRUM_BANDS],
@@ -159,8 +163,10 @@ fn run_capture(
     let init = dynamics::from_sensitivity(config.read().unwrap().audio.sensitivity);
     let mut state = CaptureState {
         level_env: Envelope::new(init.attack_ms, init.release_ms),
+        bass_env: Envelope::new(init.attack_ms, init.release_ms),
         left_env: Envelope::new(init.attack_ms, init.release_ms),
         right_env: Envelope::new(init.attack_ms, init.release_ms),
+        lp_mono: 0.0,
         spec_env: std::array::from_fn(|_| Envelope::new(10.0, 120.0)),
         last_spectrum: Instant::now(),
         spectrum: [0.0; SPECTRUM_BANDS],
@@ -217,6 +223,7 @@ fn process_chunk(
     }
 
     state.level_env.set_timing(dyn_cfg.attack_ms, dyn_cfg.release_ms);
+    state.bass_env.set_timing(dyn_cfg.attack_ms, dyn_cfg.release_ms);
     state.left_env.set_timing(dyn_cfg.attack_ms, dyn_cfg.release_ms);
     state.right_env.set_timing(dyn_cfg.attack_ms, dyn_cfg.release_ms);
 
@@ -229,6 +236,7 @@ fn process_chunk(
     let mut block_l = 0.0f32;
     let mut block_r = 0.0f32;
     let mut block_mono = 0.0f32;
+    let mut block_bass = 0.0f32;
     let mut block_n = 0usize;
 
     for chunk in bytes.chunks_exact(FRAME_BYTES) {
@@ -239,14 +247,21 @@ fn process_chunk(
         let mono = (l + r) * 0.5;
         mono_buf.push(mono);
 
+        state.lp_mono += BASS_LP_ALPHA * (mono - state.lp_mono);
+        let bass = state.lp_mono.abs();
+
         block_l = block_l.max(l);
         block_r = block_r.max(r);
         block_mono = block_mono.max(mono);
+        block_bass = block_bass.max(bass);
         block_n += 1;
         if block_n >= block_samples {
             state
                 .level_env
                 .tick(dynamics::meter_gain(block_mono, dyn_cfg.drive), block_dt);
+            state
+                .bass_env
+                .tick(dynamics::meter_gain(block_bass, dyn_cfg.drive), block_dt);
             state
                 .left_env
                 .tick(dynamics::meter_gain(block_l, dyn_cfg.drive), block_dt);
@@ -256,6 +271,7 @@ fn process_chunk(
             block_l = 0.0;
             block_r = 0.0;
             block_mono = 0.0;
+            block_bass = 0.0;
             block_n = 0;
         }
     }
@@ -264,6 +280,9 @@ fn process_chunk(
         state
             .level_env
             .tick(dynamics::meter_gain(block_mono, dyn_cfg.drive), dt);
+        state
+            .bass_env
+            .tick(dynamics::meter_gain(block_bass, dyn_cfg.drive), dt);
         state
             .left_env
             .tick(dynamics::meter_gain(block_l, dyn_cfg.drive), dt);
@@ -278,6 +297,7 @@ fn process_chunk(
     }
     snapshot.store_levels(
         state.level_env.value(),
+        state.bass_env.value(),
         state.left_env.value(),
         state.right_env.value(),
     );
