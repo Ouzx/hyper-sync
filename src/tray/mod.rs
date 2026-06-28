@@ -89,11 +89,11 @@ impl Tray for HyperTray {
                 ..Default::default()
             }),
             MenuItem::SubMenu(SubMenu {
-                label: "Presets".into(),
+                label: "Speed".into(),
                 submenu: vec![
-                    preset_item("Movie", "movie"),
-                    preset_item("Desk", "desk"),
-                    preset_item("Alert", "alert"),
+                    speed_item("Slow", 0.5),
+                    speed_item("Normal", 1.0),
+                    speed_item("Fast", 2.0),
                 ],
                 ..Default::default()
             }),
@@ -119,6 +119,7 @@ impl Tray for HyperTray {
                 brightness: None,
                 color: None,
                 fps: None,
+                speed: None,
             });
         } else {
             *self.last_mode.lock().unwrap() = current;
@@ -127,6 +128,7 @@ impl Tray for HyperTray {
                 brightness: None,
                 color: None,
                 fps: None,
+                speed: None,
             });
         }
     }
@@ -157,6 +159,7 @@ fn patch_item(label: &str, mode: &str) -> MenuItem<HyperTray> {
                 brightness: None,
                 color: None,
                 fps: None,
+                speed: None,
             });
         }),
         ..Default::default()
@@ -172,6 +175,7 @@ fn brightness_item(label: &str, value: f32) -> MenuItem<HyperTray> {
                 brightness: Some(value),
                 color: None,
                 fps: None,
+                speed: None,
             });
         }),
         ..Default::default()
@@ -188,18 +192,24 @@ fn color_item(label: &str, color: &str) -> MenuItem<HyperTray> {
                 brightness: None,
                 color: Some(color.clone()),
                 fps: None,
+                speed: None,
             });
         }),
         ..Default::default()
     })
 }
 
-fn preset_item(label: &str, name: &str) -> MenuItem<HyperTray> {
-    let name = name.to_string();
+fn speed_item(label: &str, speed: f32) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Preset { name: name.clone() });
+            ipc_async(IpcRequest::Patch {
+                mode: Some("candle".into()),
+                brightness: None,
+                color: None,
+                fps: None,
+                speed: Some(speed),
+            });
         }),
         ..Default::default()
     })

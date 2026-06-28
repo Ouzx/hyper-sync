@@ -20,6 +20,8 @@ const MODES: &[&str] = &["off", "solid", "candle", "screen"];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "000000",
 ];
+const SPEED_MIN: f32 = 0.1;
+const SPEED_MAX: f32 = 5.0;
 
 pub fn run() -> anyhow::Result<()> {
     ensure_daemon()?;
@@ -58,6 +60,7 @@ struct UiState {
     effect: String,
     brightness: f32,
     fps: u32,
+    speed: f32,
     detail: String,
     color: String,
     width: u32,
@@ -81,6 +84,7 @@ impl Default for UiState {
             effect: "screen".into(),
             brightness: 0.8,
             fps: 30,
+            speed: 1.0,
             detail: String::new(),
             color: "ff3300".into(),
             width: 0,
@@ -126,14 +130,11 @@ fn tui_loop() -> anyhow::Result<()> {
                     }
                     KeyCode::Left => cycle_color(&mut state, -1),
                     KeyCode::Right => cycle_color(&mut state, 1),
-                    KeyCode::Char('1') => {
-                        set_preset("movie").ok();
+                    KeyCode::Char('[') => {
+                        adjust_speed(-0.1).ok();
                     }
-                    KeyCode::Char('2') => {
-                        set_preset("desk").ok();
-                    }
-                    KeyCode::Char('3') => {
-                        set_preset("alert").ok();
+                    KeyCode::Char(']') => {
+                        adjust_speed(0.1).ok();
                     }
                     KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                         ipc_request(&IpcRequest::Restart).ok();
@@ -149,6 +150,7 @@ fn tui_loop() -> anyhow::Result<()> {
                     state.effect = st.effect;
                     state.brightness = st.brightness;
                     state.fps = st.fps;
+                    state.speed = st.speed;
                     state.detail = st.detail;
                     state.color = st.color;
                     state.width = st.width;
@@ -174,6 +176,9 @@ fn cycle_mode(current: &str, dir: i32) {
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {
+    if state.effect == "screen" {
+        return;
+    }
     let n = COLOR_PRESETS.len() as i32;
     state.color_idx = (state.color_idx as i32 + dir).rem_euclid(n) as usize;
     state.color = COLOR_PRESETS[state.color_idx].into();
@@ -182,6 +187,7 @@ fn cycle_color(state: &mut UiState, dir: i32) {
         brightness: None,
         color: Some(state.color.clone()),
         fps: None,
+        speed: None,
     })
     .ok();
 }
@@ -192,6 +198,7 @@ fn patch_mode(mode: &str) -> anyhow::Result<()> {
         brightness: None,
         color: None,
         fps: None,
+        speed: None,
     })?;
     Ok(())
 }
@@ -207,13 +214,26 @@ fn adjust_brightness(delta: f32) -> anyhow::Result<()> {
         brightness: Some(b),
         color: None,
         fps: None,
+        speed: None,
     })?;
     Ok(())
 }
 
-fn set_preset(name: &str) -> anyhow::Result<()> {
-    ipc_request(&IpcRequest::Preset {
-        name: name.into(),
+fn adjust_speed(delta: f32) -> anyhow::Result<()> {
+    let resp = ipc_request(&IpcRequest::Status)?;
+    let Some(st) = resp.status else {
+        return Ok(());
+    };
+    if st.effect != "candle" {
+        return Ok(());
+    }
+    let speed = (st.speed + delta).clamp(SPEED_MIN, SPEED_MAX);
+    ipc_request(&IpcRequest::Patch {
+        mode: None,
+        brightness: None,
+        color: None,
+        fps: None,
+        speed: Some(speed),
     })?;
     Ok(())
 }
@@ -224,6 +244,7 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
         .constraints([
             Constraint::Length(3),
             Constraint::Length(6),
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(5),
             Constraint::Length(2),
@@ -276,18 +297,46 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
         .ratio(state.brightness as f64);
     f.render_widget(gauge, chunks[2]);
 
-    draw_color_picker(f, chunks[3], state);
+    let speed_enabled = state.effect == "candle";
+    let speed_title = if speed_enabled {
+        "speed · [ ] adjust"
+    } else {
+        "speed (candle only)"
+    };
+    let speed_gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title(speed_title))
+        .gauge_style(if speed_enabled {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        })
+        .ratio(((state.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)).clamp(0.0, 1.0) as f64)
+        .label(format!("{:.1}x", state.speed));
+    f.render_widget(speed_gauge, chunks[3]);
+
+    draw_color_picker(f, chunks[4], state);
 
     f.render_widget(
-        Paragraph::new("q/Ctrl+C quit · Tab mode · ←→ color · 1/2/3 presets · ↑↓ brightness")
+        Paragraph::new("q/Ctrl+C quit · Tab mode · ←→ color · [ ] speed · ↑↓ brightness")
             .style(Style::default().fg(Color::DarkGray)),
-        chunks[4],
+        chunks[5],
     );
 }
 
+fn color_picker_enabled(effect: &str) -> bool {
+    effect == "solid" || effect == "candle"
+}
+
 fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
-    let block = Block::default().borders(Borders::ALL).title("color");
+    let enabled = color_picker_enabled(&state.effect);
+    let title = if enabled {
+        "color"
+    } else {
+        "color (solid/candle only)"
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
+    let dim = Style::default().fg(Color::DarkGray);
     f.render_widget(block, area);
 
     let rgb = parse_color(&state.color).unwrap_or([255, 51, 0]);
@@ -330,8 +379,23 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
 
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(format!("#{}  (solid color · ←→ pick)", state.color)),
-            Line::from(preset_line),
+            Line::from(Span::styled(
+                if enabled {
+                    format!("#{}  (solid color · ←→ pick)", state.color)
+                } else {
+                    format!("#{}  (not used in screen mode)", state.color)
+                },
+                if enabled {
+                    Style::default()
+                } else {
+                    dim
+                },
+            )),
+            Line::from(if enabled {
+                preset_line
+            } else {
+                vec![Span::styled("←→ disabled in screen mode", dim)]
+            }),
         ]),
         Rect {
             x: inner.x + 5,

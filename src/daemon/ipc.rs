@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{apply_preset, runtime_config_path, RuntimeConfig};
+use crate::config::{runtime_config_path, RuntimeConfig};
 use super::ReloadMsg;
 use crate::daemon::state::DaemonStatus;
 use crate::config::ipc_socket_path;
@@ -27,8 +27,8 @@ pub enum IpcRequest {
         brightness: Option<f32>,
         color: Option<String>,
         fps: Option<u32>,
+        speed: Option<f32>,
     },
-    Preset { name: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -125,6 +125,7 @@ fn handle_client(
                 st.effect = cfg.effect.mode.as_str().to_string();
                 st.brightness = cfg.effect.brightness;
                 st.fps = cfg.effect.fps;
+                st.speed = cfg.candle.speed;
                 st.color = cfg.solid.color.clone();
                 st.clone()
             }),
@@ -172,9 +173,9 @@ fn handle_client(
             brightness,
             color,
             fps,
+            speed,
         } => {
             let mode_change = mode.is_some();
-            let old_key = config.read().unwrap().effect_key();
             let old_mode = config.read().unwrap().effect.mode;
             {
                 let mut cfg = config.write().unwrap();
@@ -190,49 +191,22 @@ fn handle_client(
                 if let Some(f) = fps {
                     cfg.effect.fps = f.max(1);
                 }
+                if let Some(s) = speed {
+                    cfg.candle.speed = s.clamp(0.1, 5.0);
+                }
             }
-            let new_key = config.read().unwrap().effect_key();
             let new_mode = config.read().unwrap().effect.mode;
-            let msg = if mode_change && old_mode != new_mode {
-                ReloadMsg::Force
-            } else if new_key != old_key {
-                ReloadMsg::Apply
+            if mode_change && old_mode != new_mode {
+                save_and_notify(&config, &config_path, &reload_tx, ReloadMsg::Force)?;
             } else {
-                ReloadMsg::Apply
-            };
-            save_and_notify(&config, &config_path, &reload_tx, msg)?;
+                save_config(&config, &config_path)?;
+            }
             {
                 let cfg = config.read().unwrap();
                 let mut st = status.lock().unwrap();
                 st.brightness = cfg.effect.brightness;
                 st.fps = cfg.effect.fps;
-                st.color = cfg.solid.color.clone();
-                st.effect = cfg.effect.mode.as_str().to_string();
-            }
-            IpcResponse {
-                ok: true,
-                status: Some(status.lock().unwrap().clone()),
-                error: None,
-            }
-        }
-        IpcRequest::Preset { name } => {
-            let old_mode = config.read().unwrap().effect.mode;
-            {
-                let mut cfg = config.write().unwrap();
-                apply_preset(&mut cfg, &name);
-            }
-            let new_mode = config.read().unwrap().effect.mode;
-            let msg = if old_mode != new_mode {
-                ReloadMsg::Force
-            } else {
-                ReloadMsg::Apply
-            };
-            save_and_notify(&config, &config_path, &reload_tx, msg)?;
-            {
-                let cfg = config.read().unwrap();
-                let mut st = status.lock().unwrap();
-                st.brightness = cfg.effect.brightness;
-                st.fps = cfg.effect.fps;
+                st.speed = cfg.candle.speed;
                 st.color = cfg.solid.color.clone();
                 st.effect = cfg.effect.mode.as_str().to_string();
             }
@@ -246,6 +220,10 @@ fn handle_client(
     let mut stream = reader.into_inner();
     writeln!(stream, "{}", serde_json::to_string(&resp)?)?;
     Ok(())
+}
+
+fn save_config(config: &Arc<RwLock<RuntimeConfig>>, path: &Path) -> anyhow::Result<()> {
+    config.read().unwrap().save(path)
 }
 
 fn save_and_notify(

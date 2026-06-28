@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::RuntimeConfig;
+use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
 use crate::config::DeviceConfig;
 use crate::effects::solid::{parse_color, scale_rgb};
@@ -60,7 +60,9 @@ pub fn run_controlled(
     let mut flicker: Vec<f32> = vec![1.0; n];
     let start = Instant::now();
 
-    while !cancel.load(Ordering::Relaxed) {
+    while !cancel.load(Ordering::Relaxed)
+        && config.read().unwrap().effect.mode == EffectMode::Candle
+    {
         let cfg = config.read().unwrap().clone();
         let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
         let warmth = cfg.candle.warmth.clamp(0.0, 1.0);
@@ -90,6 +92,7 @@ pub fn run_controlled(
             let mut st = status.lock().unwrap();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
+            st.speed = cfg.candle.speed;
             st.serial_ok = true;
             st.detail = "candle".into();
             st.color = cfg.solid.color.clone();

@@ -120,6 +120,8 @@ enum CtlAction {
         color: Option<String>,
         #[arg(long)]
         fps: Option<u32>,
+        #[arg(long)]
+        speed: Option<f32>,
     },
 }
 
@@ -152,6 +154,7 @@ fn main() -> anyhow::Result<()> {
                     brightness: Some(brightness),
                     color: Some(color.clone()),
                     fps: Some(fps),
+                    speed: None,
                 })
             })? {
                 return Ok(());
@@ -188,12 +191,12 @@ fn main() -> anyhow::Result<()> {
         } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
-                let _ = (warmth, speed);
                 patch_config(IpcRequest::Patch {
                     mode: Some("candle".into()),
                     brightness: None,
                     color: None,
                     fps: Some(fps),
+                    speed: Some(speed),
                 })
             })? {
                 return Ok(());
@@ -225,6 +228,7 @@ fn main() -> anyhow::Result<()> {
                     brightness: Some(brightness),
                     color: None,
                     fps: Some(fps),
+                    speed: None,
                 })
             })? {
                 return Ok(());
@@ -304,12 +308,14 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
             brightness,
             color,
             fps,
+            speed,
         } => {
             ipc_request(&IpcRequest::Patch {
                 mode,
                 brightness,
                 color,
                 fps,
+                speed,
             })?;
             Ok(())
         }

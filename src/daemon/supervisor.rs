@@ -35,6 +35,7 @@ impl Supervisor {
 
     pub fn reload(&mut self) {
         self.stop_effect();
+        thread::sleep(Duration::from_millis(50));
         self.start_effect();
     }
 
@@ -52,12 +53,11 @@ impl Supervisor {
             }
             // ponytail: never block the daemon main loop waiting on pipewire — detach if still running
         }
-        self.cancel.store(false, Ordering::SeqCst);
     }
 
     fn needs_restart(&self) -> bool {
         let cfg = self.config.read().unwrap();
-        self.handle.is_none()
+        self.handle.as_ref().is_none_or(|h| h.is_finished())
             || cfg.effect.mode != self.last_mode
             || cfg.effect_key() != self.last_effect_key
     }
@@ -71,10 +71,12 @@ impl Supervisor {
             st.effect = cfg.effect.mode.as_str().to_string();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
+            st.speed = cfg.candle.speed;
             st.color = cfg.solid.color.clone();
             st.last_error = None;
         }
 
+        self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = Arc::clone(&self.cancel);
         let config = Arc::clone(&self.config);
         let status = Arc::clone(&self.status);
@@ -123,11 +125,12 @@ fn run_off(
     config: &Arc<RwLock<RuntimeConfig>>,
     cancel: &AtomicBool,
 ) -> anyhow::Result<()> {
-    let cfg = config.read().unwrap();
-    let frame = black_frame(cfg.device.leds);
-    writer.lock().unwrap().write_frame(&frame)?;
+    let leds = config.read().unwrap().device.leds;
+    let frame = black_frame(leds);
+    let interval = Duration::from_millis(200);
     while !cancel.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(200));
+        writer.lock().unwrap().write_frame(&frame)?;
+        thread::sleep(interval);
     }
     Ok(())
 }

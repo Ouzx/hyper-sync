@@ -212,36 +212,13 @@ impl RuntimeConfig {
     pub fn effect_key(&self) -> String {
         match self.effect.mode {
             EffectMode::Off => "off".into(),
-            EffectMode::Solid => format!("solid:{}", self.solid.color),
-            EffectMode::Candle => format!(
-                "candle:{}:{}:{}",
-                self.candle.warmth, self.candle.speed, self.solid.color
-            ),
+            EffectMode::Solid => "solid".into(),
+            EffectMode::Candle => "candle".into(),
             #[cfg(feature = "screen")]
             EffectMode::Screen => format!("screen:{}:{}", self.screen.monitor, self.screen.layout),
             #[cfg(not(feature = "screen"))]
             EffectMode::Screen => "screen".into(),
         }
-    }
-}
-
-pub fn apply_preset(cfg: &mut RuntimeConfig, name: &str) {
-    match name {
-        "movie" => {
-            cfg.effect.mode = EffectMode::Screen;
-            cfg.effect.brightness = 0.15;
-        }
-        "desk" => {
-            cfg.effect.mode = EffectMode::Candle;
-            cfg.effect.brightness = 0.6;
-            cfg.candle.warmth = 0.95;
-        }
-        "alert" => {
-            cfg.effect.mode = EffectMode::Solid;
-            cfg.solid.color = "ff0000".into();
-            cfg.effect.brightness = 1.0;
-        }
-        _ => {}
     }
 }
 

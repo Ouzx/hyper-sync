@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use crate::config::RuntimeConfig;
+use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
 use crate::config::DeviceConfig;
 use crate::protocol::build_frame;
@@ -74,7 +74,9 @@ pub fn run_controlled(
     status: Arc<Mutex<DaemonStatus>>,
     _preview: Arc<Mutex<Vec<u8>>>,
 ) -> anyhow::Result<()> {
-    while !cancel.load(Ordering::Relaxed) {
+    while !cancel.load(Ordering::Relaxed)
+        && config.read().unwrap().effect.mode == EffectMode::Solid
+    {
         let cfg = config.read().unwrap().clone();
         let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
         let color = parse_color(&cfg.solid.color)?;
