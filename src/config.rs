@@ -55,6 +55,8 @@ pub enum EffectMode {
     Segment,
     Strobe,
     Wipe,
+    #[serde(rename = "sound_viz")]
+    SoundViz,
     Screen,
     #[serde(rename = "screen_center")]
     ScreenCenter,
@@ -78,6 +80,7 @@ impl EffectMode {
             Self::Segment => "segment",
             Self::Strobe => "strobe",
             Self::Wipe => "wipe",
+            Self::SoundViz => "sound_viz",
             Self::Screen => "screen",
             Self::ScreenCenter => "screen_center",
         }
@@ -85,6 +88,34 @@ impl EffectMode {
 
     pub fn is_screen(self) -> bool {
         matches!(self, Self::Screen | Self::ScreenCenter)
+    }
+
+    pub fn needs_audio(self) -> bool {
+        matches!(self, Self::SoundViz)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SoundMode {
+    Off,
+    Level,
+    Balance,
+}
+
+impl SoundMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Level => "level",
+            Self::Balance => "balance",
+        }
+    }
+}
+
+impl Default for SoundMode {
+    fn default() -> Self {
+        Self::Off
     }
 }
 
@@ -100,6 +131,8 @@ pub struct RuntimeConfig {
     pub effect: EffectSection,
     pub solid: SolidSection,
     pub candle: CandleSection,
+    #[serde(default)]
+    pub audio: AudioSection,
     #[cfg(feature = "screen")]
     pub screen: ScreenSection,
 }
@@ -128,6 +161,24 @@ pub struct EffectSection {
 pub struct SolidSection {
     #[serde(default = "default_color")]
     pub color: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AudioSection {
+    #[serde(default)]
+    pub sound_mode: SoundMode,
+    #[serde(default = "default_reactivity")]
+    pub reactivity: f32,
+    #[serde(default = "default_sensitivity")]
+    pub sensitivity: f32,
+}
+
+fn default_reactivity() -> f32 {
+    0.6
+}
+
+fn default_sensitivity() -> f32 {
+    0.5
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +243,7 @@ impl Default for RuntimeConfig {
             candle: CandleSection {
                 warmth: default_warmth(),
             },
+            audio: AudioSection::default(),
             #[cfg(feature = "screen")]
             screen: ScreenSection {
                 monitor: 0,
@@ -263,6 +315,7 @@ impl RuntimeConfig {
             EffectMode::Segment => "segment".into(),
             EffectMode::Strobe => "strobe".into(),
             EffectMode::Wipe => "wipe".into(),
+            EffectMode::SoundViz => "sound_viz".into(),
             #[cfg(feature = "screen")]
             EffectMode::Screen | EffectMode::ScreenCenter => {
                 format!("screen:{}:{}", self.screen.monitor, self.screen.layout)

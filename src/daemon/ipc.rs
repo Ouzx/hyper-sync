@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
+use std::io::ErrorKind;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -9,7 +10,7 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{runtime_config_path, EffectMode, RuntimeConfig};
+use crate::config::{runtime_config_path, EffectMode, RuntimeConfig, SoundMode};
 use super::ReloadMsg;
 use crate::daemon::state::DaemonStatus;
 use crate::config::ipc_socket_path;
@@ -30,6 +31,9 @@ pub enum IpcRequest {
         color: Option<String>,
         fps: Option<u32>,
         speed: Option<f32>,
+        sound_mode: Option<String>,
+        reactivity: Option<f32>,
+        sensitivity: Option<f32>,
     },
 }
 
@@ -87,21 +91,31 @@ pub fn run_server(
     }
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind {}", socket_path.display()))?;
+    listener
+        .set_nonblocking(true)
+        .context("ipc nonblocking")?;
     eprintln!("hyper-sync ipc listening on {}", socket_path.display());
 
-    for stream in listener.incoming() {
+    loop {
         if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
-        let Ok(stream) = stream else { continue };
-        let config = Arc::clone(&config);
-        let config_path = Arc::clone(&config_path);
-        let status = Arc::clone(&status);
-        let reload_tx = reload_tx.clone();
-        let shutdown = Arc::clone(&shutdown);
-        thread::spawn(move || {
-            let _ = handle_client(stream, config, config_path, status, reload_tx, shutdown);
-        });
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let config = Arc::clone(&config);
+                let config_path = Arc::clone(&config_path);
+                let status = Arc::clone(&status);
+                let reload_tx = reload_tx.clone();
+                let shutdown = Arc::clone(&shutdown);
+                thread::spawn(move || {
+                    let _ = handle_client(stream, config, config_path, status, reload_tx, shutdown);
+                });
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     Ok(())
 }
@@ -129,6 +143,9 @@ fn handle_client(
                 st.fps = cfg.effect.fps;
                 st.speed = cfg.effect.speed;
                 st.color = cfg.solid.color.clone();
+                st.sound_mode = cfg.audio.sound_mode.as_str().to_string();
+                st.reactivity = cfg.audio.reactivity;
+                st.sensitivity = cfg.audio.sensitivity;
                 st.clone()
             }),
             error: None,
@@ -184,6 +201,9 @@ fn handle_client(
             color,
             fps,
             speed,
+            sound_mode,
+            reactivity,
+            sensitivity,
         } => {
             let mode_change = mode.is_some();
             let old_mode = config.read().unwrap().effect.mode;
@@ -209,6 +229,15 @@ fn handle_client(
                 if let Some(s) = speed {
                     cfg.effect.speed = s.clamp(0.1, 5.0);
                 }
+                if let Some(sm) = sound_mode {
+                    cfg.audio.sound_mode = parse_sound_mode(&sm)?;
+                }
+                if let Some(r) = reactivity {
+                    cfg.audio.reactivity = r.clamp(0.0, 1.0);
+                }
+                if let Some(s) = sensitivity {
+                    cfg.audio.sensitivity = s.clamp(0.0, 1.0);
+                }
             }
             let new_mode = config.read().unwrap().effect.mode;
             if mode_change && old_mode != new_mode {
@@ -229,6 +258,9 @@ fn handle_client(
                 st.speed = cfg.effect.speed;
                 st.color = cfg.solid.color.clone();
                 st.effect = cfg.effect.mode.as_str().to_string();
+                st.sound_mode = cfg.audio.sound_mode.as_str().to_string();
+                st.reactivity = cfg.audio.reactivity;
+                st.sensitivity = cfg.audio.sensitivity;
             }
             IpcResponse {
                 ok: true,
@@ -277,9 +309,19 @@ fn parse_mode(s: &str) -> anyhow::Result<crate::config::EffectMode> {
         "segment" => EffectMode::Segment,
         "strobe" => EffectMode::Strobe,
         "wipe" => EffectMode::Wipe,
+        "sound_viz" => EffectMode::SoundViz,
         "screen" => EffectMode::Screen,
         "screen_center" => EffectMode::ScreenCenter,
         other => anyhow::bail!("unknown mode {other}"),
+    })
+}
+
+fn parse_sound_mode(s: &str) -> anyhow::Result<SoundMode> {
+    Ok(match s {
+        "off" => SoundMode::Off,
+        "level" => SoundMode::Level,
+        "balance" => SoundMode::Balance,
+        other => anyhow::bail!("unknown sound_mode {other}"),
     })
 }
 

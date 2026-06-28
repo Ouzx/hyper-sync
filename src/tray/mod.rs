@@ -92,9 +92,19 @@ impl Tray for HyperTray {
                             patch_item("Segment", "segment"),
                             patch_item("Strobe", "strobe"),
                             patch_item("Wipe", "wipe"),
+                            patch_item("Sound Viz", "sound_viz"),
                         ],
                         ..Default::default()
                     }),
+                ],
+                ..Default::default()
+            }),
+            MenuItem::SubMenu(SubMenu {
+                label: "Sound".into(),
+                submenu: vec![
+                    sound_mode_item("Off", "off"),
+                    sound_mode_item("Level", "level"),
+                    sound_mode_item("Balance", "balance"),
                 ],
                 ..Default::default()
             }),
@@ -150,6 +160,9 @@ impl Tray for HyperTray {
                 color: None,
                 fps: None,
                 speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
             });
         } else {
             *self.last_mode.lock().unwrap() = current;
@@ -159,6 +172,9 @@ impl Tray for HyperTray {
                 color: None,
                 fps: None,
                 speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
             });
         }
     }
@@ -194,6 +210,29 @@ fn patch_item(label: &str, mode: &str) -> MenuItem<HyperTray> {
                 color: None,
                 fps: None,
                 speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
+            });
+        }),
+        ..Default::default()
+    })
+}
+
+fn sound_mode_item(label: &str, mode: &str) -> MenuItem<HyperTray> {
+    let mode = mode.to_string();
+    MenuItem::Standard(StandardItem {
+        label: label.into(),
+        activate: Box::new(move |_| {
+            ipc_async(IpcRequest::Patch {
+                mode: None,
+                brightness: None,
+                color: None,
+                fps: None,
+                speed: None,
+                sound_mode: Some(mode.clone()),
+                reactivity: None,
+                sensitivity: None,
             });
         }),
         ..Default::default()
@@ -210,6 +249,9 @@ fn brightness_item(label: &str, value: f32) -> MenuItem<HyperTray> {
                 color: None,
                 fps: None,
                 speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
             });
         }),
         ..Default::default()
@@ -227,6 +269,9 @@ fn color_item(label: &str, color: &str) -> MenuItem<HyperTray> {
                 color: Some(color.clone()),
                 fps: None,
                 speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
             });
         }),
         ..Default::default()
@@ -243,6 +288,9 @@ fn speed_item(label: &str, speed: f32) -> MenuItem<HyperTray> {
                 color: None,
                 fps: None,
                 speed: Some(speed),
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
             });
         }),
         ..Default::default()

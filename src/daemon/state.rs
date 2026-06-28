@@ -15,6 +15,22 @@ pub struct DaemonStatus {
     pub width: u32,
     pub height: u32,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub sound_mode: String,
+    #[serde(default)]
+    pub audio_level: f32,
+    #[serde(default = "default_reactivity")]
+    pub reactivity: f32,
+    #[serde(default = "default_sensitivity")]
+    pub sensitivity: f32,
+}
+
+fn default_reactivity() -> f32 {
+    0.6
+}
+
+fn default_sensitivity() -> f32 {
+    0.5
 }
 
 impl DaemonStatus {
@@ -31,6 +47,10 @@ impl DaemonStatus {
             width: 0,
             height: 0,
             last_error: None,
+            sound_mode: cfg.audio.sound_mode.as_str().to_string(),
+            audio_level: 0.0,
+            reactivity: cfg.audio.reactivity,
+            sensitivity: cfg.audio.sensitivity,
         }
     }
 }

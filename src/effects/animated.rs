@@ -7,8 +7,12 @@ use std::time::{Duration, Instant};
 use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
 use crate::effects::solid::{resolve_pixel_color, scale_rgb};
+use crate::layout::segment_bounds;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
+
+#[cfg(feature = "audio")]
+use crate::audio::{maybe_modulate, AudioSnapshot};
 
 pub fn run_controlled(
     mode: EffectMode,
@@ -16,6 +20,7 @@ pub fn run_controlled(
     config: Arc<RwLock<RuntimeConfig>>,
     cancel: Arc<AtomicBool>,
     status: Arc<Mutex<DaemonStatus>>,
+    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     let n = config.read().unwrap().device.leds as usize;
     let mut fire_flicker = vec![1.0f32; n];
@@ -31,7 +36,7 @@ pub fn run_controlled(
         let speed = cfg.effect.speed.max(0.1);
         let t = start.elapsed().as_secs_f32() * speed;
         let accent = cfg.solid.color.as_str();
-        let rgb = render_frame(
+        let mut rgb = render_frame(
             mode,
             n,
             t,
@@ -39,6 +44,8 @@ pub fn run_controlled(
             cfg.effect.brightness,
             &mut fire_flicker,
         );
+        #[cfg(feature = "audio")]
+        maybe_modulate(&mut rgb, n, &cfg, &audio);
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
         {
@@ -49,6 +56,10 @@ pub fn run_controlled(
             st.serial_ok = true;
             st.detail = mode.as_str().into();
             st.color = cfg.solid.color.clone();
+            #[cfg(feature = "audio")]
+            {
+                st.audio_level = audio.level();
+            }
         }
         thread::sleep(interval);
     }
@@ -91,13 +102,6 @@ fn dist_loop(i: usize, pos: f32, n: usize) -> f32 {
     let d = (i as f32 - pos).abs();
     let n = n as f32;
     d.min(n - d)
-}
-
-fn segment_bounds(n: usize) -> [(usize, usize); 3] {
-    let right = n * 17 / 65;
-    let top = n * 31 / 65;
-    let left = n.saturating_sub(right + top);
-    [(0, right), (right, right + top), (right + top, right + top + left)]
 }
 
 fn set_pixel(rgb: &mut [u8], i: usize, color: [u8; 3], gain: f32) {

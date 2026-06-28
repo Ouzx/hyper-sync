@@ -10,12 +10,13 @@ name = "hyper-sync"
 path = "src/main.rs"
 
 [features]
-default = ["screen", "daemon"]
+default = ["screen", "daemon", "audio"]
 screen = ["dep:ashpd", "dep:pipewire", "dep:tokio"]
 daemon = ["dep:serde_json", "dep:notify", "dep:tokio", "dep:ctrlc"]
+audio = []
 tui = ["daemon", "dep:ratatui", "dep:crossterm"]
 tray = ["daemon", "dep:ksni", "dep:image"]
-full = ["screen", "daemon", "tui", "tray"]
+full = ["screen", "daemon", "audio", "tui", "tray"]
 
 [dependencies]
 anyhow = "1"

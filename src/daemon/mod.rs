@@ -76,13 +76,33 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
     }
     eprintln!("hyper-sync daemon ipc ready");
 
-    let mut supervisor = supervisor::Supervisor::new(Arc::clone(&config), Arc::clone(&status));
+    #[cfg(feature = "audio")]
+    let audio_snapshot = Arc::new(crate::audio::AudioSnapshot::new());
+    #[cfg(feature = "audio")]
+    let mut audio_monitor = crate::audio::AudioMonitor::new(
+        Arc::clone(&audio_snapshot),
+        Arc::clone(&status),
+        Arc::clone(&config),
+    );
+
+    let mut supervisor = supervisor::Supervisor::new(
+        Arc::clone(&config),
+        Arc::clone(&status),
+        #[cfg(feature = "audio")]
+        Arc::clone(&audio_snapshot),
+    );
     supervisor.reload();
+
+    #[cfg(feature = "audio")]
+    if crate::audio::audio_needed(&config.read().unwrap()) {
+        audio_monitor.start();
+    }
 
     let cfg_path = Arc::clone(&config_path);
     let cfg_arc = Arc::clone(&config);
     let reload_tx_watch = reload_tx.clone();
-    thread::spawn(move || watch_config(&cfg_path, cfg_arc, reload_tx_watch));
+    let watch_shutdown = Arc::clone(&shutdown);
+    thread::spawn(move || watch_config(&cfg_path, cfg_arc, reload_tx_watch, watch_shutdown));
 
     #[cfg(feature = "tray")]
     if with_tray {
@@ -112,6 +132,19 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
             }
         }
         supervisor.tick();
+        #[cfg(feature = "audio")]
+        {
+            let cfg = config.read().unwrap();
+            if crate::audio::audio_needed(&cfg) {
+                if !audio_monitor.is_running() {
+                    audio_monitor.start();
+                }
+            } else if audio_monitor.is_running() {
+                audio_monitor.stop();
+            }
+            status.lock().unwrap().audio_level = audio_snapshot.level();
+            drop(cfg);
+        }
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
@@ -120,17 +153,29 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
 
     supervisor.stop_effect();
     supervisor.shutdown();
+    #[cfg(feature = "audio")]
+    audio_monitor.stop();
     let _ = std::fs::remove_file(crate::config::ipc_socket_path());
     eprintln!("hyper-sync daemon stopped");
     Ok(())
 }
 
-fn watch_config(path: &PathBuf, config: Arc<RwLock<RuntimeConfig>>, reload_tx: mpsc::Sender<ReloadMsg>) {
+fn watch_config(
+    path: &PathBuf,
+    config: Arc<RwLock<RuntimeConfig>>,
+    reload_tx: mpsc::Sender<ReloadMsg>,
+    shutdown: Arc<AtomicBool>,
+) {
     let (tx, rx): (mpsc::Sender<notify::Result<notify::Event>>, Receiver<_>) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).expect("notify watcher");
     let _ = watcher.watch(path.as_path(), RecursiveMode::NonRecursive);
     let mut last_seen_save_gen = config_save_gen();
-    while let Ok(Ok(event)) = rx.recv() {
+    while !shutdown.load(Ordering::Relaxed) {
+        let event = match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(Ok(event)) => event,
+            Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+        };
         if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
             continue;
         }

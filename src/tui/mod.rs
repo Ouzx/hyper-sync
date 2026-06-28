@@ -1,5 +1,7 @@
 use std::io::stdout;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,7 +35,9 @@ const MODES: &[&str] = &[
     "segment",
     "strobe",
     "wipe",
+    "sound_viz",
 ];
+const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "rainbow",
 ];
@@ -43,10 +47,17 @@ const SPEED_MAX: f32 = 5.0;
 pub fn run() -> anyhow::Result<()> {
     ensure_daemon()?;
 
+    let quit = Arc::new(AtomicBool::new(false));
+    let quit_signal = Arc::clone(&quit);
+    ctrlc::set_handler(move || {
+        quit_signal.store(true, Ordering::Relaxed);
+    })
+    .context("ctrl-c handler")?;
+
     enable_raw_mode().context("raw mode")?;
     stdout().execute(EnterAlternateScreen).context("alt screen")?;
 
-    let result = tui_loop();
+    let result = tui_loop(quit);
 
     stdout().execute(LeaveAlternateScreen).ok();
     disable_raw_mode().ok();
@@ -84,6 +95,10 @@ struct UiState {
     height: u32,
     serial_ok: bool,
     last_error: Option<String>,
+    sound_mode: String,
+    audio_level: f32,
+    reactivity: f32,
+    sensitivity: f32,
     color_idx: usize,
     list_cursor: usize,
     digit_buf: String,
@@ -116,6 +131,10 @@ impl Default for UiState {
             height: 0,
             serial_ok: true,
             last_error: None,
+            sound_mode: "off".into(),
+            audio_level: 0.0,
+            reactivity: 0.6,
+            sensitivity: 0.5,
             color_idx: 0,
             list_cursor: 0,
             digit_buf: String::new(),
@@ -124,12 +143,16 @@ impl Default for UiState {
     }
 }
 
-fn tui_loop() -> anyhow::Result<()> {
+fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout()))?;
     let mut state = UiState::default();
     let mut last_poll = Instant::now() - Duration::from_secs(1);
 
     loop {
+        if quit.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
                 match code {
@@ -173,6 +196,19 @@ fn tui_loop() -> anyhow::Result<()> {
                     KeyCode::Char(']') => {
                         adjust_speed(0.1).ok();
                     }
+                    KeyCode::Char('m') | KeyCode::Char('M') => cycle_sound_mode(&mut state),
+                    KeyCode::Char('-') => {
+                        adjust_reactivity(-0.05).ok();
+                    }
+                    KeyCode::Char('=') => {
+                        adjust_reactivity(0.05).ok();
+                    }
+                    KeyCode::Char(',') => {
+                        adjust_sensitivity(-0.05).ok();
+                    }
+                    KeyCode::Char('.') => {
+                        adjust_sensitivity(0.05).ok();
+                    }
                     KeyCode::Char('p') | KeyCode::Char('P') => {
                         ipc_request(&IpcRequest::ReselectScreen).ok();
                     }
@@ -197,6 +233,10 @@ fn tui_loop() -> anyhow::Result<()> {
                     state.height = st.height;
                     state.serial_ok = st.serial_ok;
                     state.last_error = st.last_error;
+                    state.sound_mode = st.sound_mode;
+                    state.audio_level = st.audio_level;
+                    state.reactivity = st.reactivity;
+                    state.sensitivity = st.sensitivity;
                     state.sync_color_idx();
                     state.sync_list_cursor();
                 }
@@ -278,6 +318,30 @@ fn cycle_color(state: &mut UiState, dir: i32) {
         color: Some(state.color.clone()),
         fps: None,
         speed: None,
+        sound_mode: None,
+        reactivity: None,
+        sensitivity: None,
+    })
+    .ok();
+}
+
+fn cycle_sound_mode(state: &mut UiState) {
+    let next = (SOUND_MODES
+        .iter()
+        .position(|m| *m == state.sound_mode.as_str())
+        .unwrap_or(0)
+        + 1)
+        % SOUND_MODES.len();
+    state.sound_mode = SOUND_MODES[next].to_string();
+    ipc_request(&IpcRequest::Patch {
+        mode: None,
+        brightness: None,
+        color: None,
+        fps: None,
+        speed: None,
+        sound_mode: Some(state.sound_mode.clone()),
+        reactivity: None,
+        sensitivity: None,
     })
     .ok();
 }
@@ -290,6 +354,9 @@ fn patch_mode(mode: &str, state: &mut UiState) -> anyhow::Result<()> {
         color: None,
         fps: None,
         speed: None,
+        sound_mode: None,
+        reactivity: None,
+        sensitivity: None,
     })?;
     Ok(())
 }
@@ -306,6 +373,9 @@ fn adjust_brightness(delta: f32) -> anyhow::Result<()> {
         color: None,
         fps: None,
         speed: None,
+        sound_mode: None,
+        reactivity: None,
+        sensitivity: None,
     })?;
     Ok(())
 }
@@ -325,8 +395,59 @@ fn adjust_speed(delta: f32) -> anyhow::Result<()> {
         color: None,
         fps: None,
         speed: Some(speed),
+        sound_mode: None,
+        reactivity: None,
+        sensitivity: None,
     })?;
     Ok(())
+}
+
+fn adjust_reactivity(delta: f32) -> anyhow::Result<()> {
+    let resp = ipc_request(&IpcRequest::Status)?;
+    let Some(st) = resp.status else {
+        return Ok(());
+    };
+    if st.sound_mode == "off" {
+        return Ok(());
+    }
+    let reactivity = (st.reactivity + delta).clamp(0.0, 1.0);
+    ipc_request(&IpcRequest::Patch {
+        mode: None,
+        brightness: None,
+        color: None,
+        fps: None,
+        speed: None,
+        sound_mode: None,
+        reactivity: Some(reactivity),
+        sensitivity: None,
+    })?;
+    Ok(())
+}
+
+fn adjust_sensitivity(delta: f32) -> anyhow::Result<()> {
+    let resp = ipc_request(&IpcRequest::Status)?;
+    let Some(st) = resp.status else {
+        return Ok(());
+    };
+    if st.sound_mode == "off" {
+        return Ok(());
+    }
+    let sensitivity = (st.sensitivity + delta).clamp(0.0, 1.0);
+    ipc_request(&IpcRequest::Patch {
+        mode: None,
+        brightness: None,
+        color: None,
+        fps: None,
+        speed: None,
+        sound_mode: None,
+        reactivity: None,
+        sensitivity: Some(sensitivity),
+    })?;
+    Ok(())
+}
+
+fn sound_enabled(state: &UiState) -> bool {
+    state.sound_mode != "off"
 }
 
 fn draw_ui(f: &mut Frame, state: &mut UiState) {
@@ -340,17 +461,55 @@ fn draw_ui(f: &mut Frame, state: &mut UiState) {
 }
 
 fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
+    let sound_on = sound_enabled(state);
+    let mut constraints = vec![
+        Constraint::Length(if sound_on { 10 } else { 7 }),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+    ];
+    if sound_on {
+        constraints.push(Constraint::Length(3));
+        constraints.push(Constraint::Length(3));
+    }
+    constraints.extend([
+        Constraint::Length(5),
+        Constraint::Min(0),
+        Constraint::Length(2),
+    ]);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(6),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(2),
-        ])
+        .constraints(constraints)
         .split(area);
+
+    let mut ci = 0usize;
+    let controls_chunk = chunks[ci];
+    ci += 1;
+    let brightness_chunk = chunks[ci];
+    ci += 1;
+    let speed_chunk = chunks[ci];
+    ci += 1;
+    let audio_chunk = chunks[ci];
+    ci += 1;
+    let boost_chunk = if sound_on {
+        let c = chunks[ci];
+        ci += 1;
+        Some(c)
+    } else {
+        None
+    };
+    let sensitivity_chunk = if sound_on {
+        let c = chunks[ci];
+        ci += 1;
+        Some(c)
+    } else {
+        None
+    };
+    let color_chunk = chunks[ci];
+    ci += 1;
+    let _spacer = chunks[ci];
+    ci += 1;
+    let legend_chunk = chunks[ci];
 
     let status_line = if state.serial_ok {
         format!(
@@ -369,21 +528,44 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
         Line::from(format!("Brightness  {:.2}   ↑↓ adjust", state.brightness)),
         Line::from(format!("FPS        {}", state.fps)),
         Line::from(format!("Active     {}", state.effect)),
-        Line::from(format!("Status     {status_line}")),
     ];
+    if sound_on {
+        controls.push(Line::from(Span::styled(
+            "── audio ──────────────────",
+            Style::default().fg(Color::DarkGray),
+        )));
+        controls.push(Line::from(format!(
+            "Sound       {}   m cycle",
+            state.sound_mode
+        )));
+        controls.push(Line::from(format!(
+            "Boost       {:.0}%   - = adjust",
+            state.reactivity * 100.0
+        )));
+        controls.push(Line::from(format!(
+            "Sensitivity {:.0}%   , . adjust",
+            state.sensitivity * 100.0
+        )));
+    } else {
+        controls.push(Line::from(format!(
+            "Sound      {}   m cycle",
+            state.sound_mode
+        )));
+    }
+    controls.push(Line::from(format!("Status     {status_line}")));
     if let Some(err) = &state.last_error {
         controls.push(Line::from(format!("Error      {err}")));
     }
     f.render_widget(
         Paragraph::new(controls).block(Block::default().borders(Borders::ALL).title("controls")),
-        chunks[0],
+        controls_chunk,
     );
 
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("brightness"))
         .gauge_style(Style::default().fg(Color::Cyan))
         .ratio(state.brightness as f64);
-    f.render_widget(gauge, chunks[1]);
+    f.render_widget(gauge, brightness_chunk);
 
     let speed_enabled = uses_speed(&state.effect);
     let speed_title = if speed_enabled {
@@ -400,14 +582,60 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .ratio(((state.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)).clamp(0.0, 1.0) as f64)
         .label(format!("{:.1}x", state.speed));
-    f.render_widget(speed_gauge, chunks[2]);
+    f.render_widget(speed_gauge, speed_chunk);
 
-    draw_color_picker(f, chunks[3], state);
+    let audio_title = if sound_on {
+        "audio level"
+    } else {
+        "audio level (sound off)"
+    };
+    let audio_gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title(audio_title))
+        .gauge_style(if sound_on {
+            Style::default().fg(Color::Magenta)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        })
+        .ratio(state.audio_level.clamp(0.0, 1.0) as f64)
+        .label(format!("{:.0}%", state.audio_level * 100.0));
+    f.render_widget(audio_gauge, audio_chunk);
 
+    if let Some(boost_chunk) = boost_chunk {
+        let boost_gauge = Gauge::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("audio brightness boost · - = adjust"),
+            )
+            .gauge_style(Style::default().fg(Color::Green))
+            .ratio(state.reactivity.clamp(0.0, 1.0) as f64)
+            .label(format!("{:.0}%", state.reactivity * 100.0));
+        f.render_widget(boost_gauge, boost_chunk);
+    }
+
+    if let Some(sensitivity_chunk) = sensitivity_chunk {
+        let sensitivity_gauge = Gauge::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("audio sensitivity · , . adjust"),
+            )
+            .gauge_style(Style::default().fg(Color::LightBlue))
+            .ratio(state.sensitivity.clamp(0.0, 1.0) as f64)
+            .label(format!("{:.0}%", state.sensitivity * 100.0));
+        f.render_widget(sensitivity_gauge, sensitivity_chunk);
+    }
+
+    draw_color_picker(f, color_chunk, state);
+
+    let legend = if sound_on {
+        "↑↓ brightness · ←→ color · [ ] speed · j/k effect · m sound · - = boost · , . sensitivity · p reselect screen"
+    } else {
+        "↑↓ brightness · ←→ color · [ ] speed · j/k effect · m sound · p reselect screen"
+    };
     f.render_widget(
-        Paragraph::new("↑↓ brightness · ←→ color · [ ] speed · j/k effect · p reselect screen")
-            .style(Style::default().fg(Color::DarkGray)),
-        chunks[5],
+        Paragraph::new(legend).style(Style::default().fg(Color::DarkGray)),
+        legend_chunk,
     );
 }
 
@@ -502,6 +730,7 @@ fn mode_label(mode: &str) -> String {
         "segment" => "Segment".into(),
         "strobe" => "Strobe".into(),
         "wipe" => "Wipe".into(),
+        "sound_viz" => "Sound Viz".into(),
         _ => mode.into(),
     }
 }
@@ -523,7 +752,10 @@ fn effect_label_style(is_active: bool, is_cursor: bool, screen_sync: bool) -> St
 }
 
 fn uses_speed(effect: &str) -> bool {
-    effect != "off" && effect != "solid" && !is_screen_sync(effect)
+    effect != "off"
+        && effect != "solid"
+        && effect != "sound_viz"
+        && !is_screen_sync(effect)
 }
 
 fn uses_accent_color(effect: &str) -> bool {

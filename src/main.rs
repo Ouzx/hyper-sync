@@ -4,8 +4,11 @@ mod config;
 #[cfg(feature = "daemon")]
 mod daemon;
 mod effects;
+mod layout;
 mod protocol;
 mod serial;
+#[cfg(feature = "audio")]
+mod audio;
 #[cfg(feature = "tui")]
 mod tui;
 #[cfg(feature = "tray")]
@@ -157,6 +160,9 @@ fn main() -> anyhow::Result<()> {
                     color: Some(color.clone()),
                     fps: Some(fps),
                     speed: None,
+                    sound_mode: None,
+                    reactivity: None,
+                    sensitivity: None,
                 })
             })? {
                 return Ok(());
@@ -199,6 +205,9 @@ fn main() -> anyhow::Result<()> {
                     color: None,
                     fps: Some(fps),
                     speed: Some(speed),
+                    sound_mode: None,
+                    reactivity: None,
+                    sensitivity: None,
                 })
             })? {
                 return Ok(());
@@ -231,6 +240,9 @@ fn main() -> anyhow::Result<()> {
                     color: None,
                     fps: Some(fps),
                     speed: None,
+                    sound_mode: None,
+                    reactivity: None,
+                    sensitivity: None,
                 })
             })? {
                 return Ok(());
@@ -322,6 +334,9 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
                 color,
                 fps,
                 speed,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
             })?;
             Ok(())
         }

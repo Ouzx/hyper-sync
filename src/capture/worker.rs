@@ -23,6 +23,9 @@ use crate::effects::solid::scale_rgb_buf;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
 
+#[cfg(feature = "audio")]
+use crate::audio::{maybe_modulate, AudioSnapshot};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
     Idle,
@@ -51,6 +54,7 @@ impl ScreenWorker {
         config: Arc<RwLock<RuntimeConfig>>,
         status: Arc<Mutex<DaemonStatus>>,
         writer: Arc<Mutex<SerialWriter>>,
+        #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -73,6 +77,8 @@ impl ScreenWorker {
                 config,
                 status,
                 writer,
+                #[cfg(feature = "audio")]
+                audio,
             );
         });
 
@@ -137,6 +143,7 @@ fn worker_loop(
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
     writer: Arc<Mutex<SerialWriter>>,
+    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) {
     let rt = Arc::new(
         tokio::runtime::Runtime::new().expect("screen worker tokio runtime"),
@@ -174,6 +181,8 @@ fn worker_loop(
                         Arc::clone(&status),
                         Arc::clone(&writer),
                         false,
+                        #[cfg(feature = "audio")]
+                        Arc::clone(&audio),
                     );
                     portal_settle(&last_portal_close);
                     running.store(false, Ordering::SeqCst);
@@ -247,6 +256,8 @@ fn worker_loop(
                     Arc::clone(&status),
                     Arc::clone(&writer),
                     true,
+                    #[cfg(feature = "audio")]
+                    Arc::clone(&audio),
                 );
                 portal_settle(&last_portal_close);
                 running.store(false, Ordering::SeqCst);
@@ -322,6 +333,8 @@ struct CtrlFrameState {
     cancel: Arc<AtomicBool>,
     mainloop_ptr: *mut pw::sys::pw_main_loop,
     quit_reason: std::cell::RefCell<&'static str>,
+    #[cfg(feature = "audio")]
+    audio: Arc<AudioSnapshot>,
 }
 
 fn run_capture(
@@ -333,6 +346,7 @@ fn run_capture(
     status: Arc<Mutex<DaemonStatus>>,
     writer: Arc<Mutex<SerialWriter>>,
     forget_portal: bool,
+    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
@@ -441,6 +455,8 @@ fn run_capture(
         cancel: Arc::clone(&cancel),
         mainloop_ptr,
         quit_reason: std::cell::RefCell::new("unknown"),
+        #[cfg(feature = "audio")]
+        audio,
     });
 
     let cancel_watch = Arc::clone(&cancel);
@@ -535,6 +551,9 @@ fn run_capture(
                 };
                 scale_rgb_buf(&mut rgb, cfg.effect.brightness);
                 let leds = cfg.device.leds;
+                let n = usize::from(leds);
+                #[cfg(feature = "audio")]
+                maybe_modulate(&mut rgb, n, &cfg, &state.audio);
                 drop(cfg);
 
                 if let Ok(packet) = build_frame(leds, &rgb) {
@@ -550,6 +569,10 @@ fn run_capture(
                         st.height = height;
                         st.serial_ok = true;
                         st.detail = format!("{width}x{height}");
+                        #[cfg(feature = "audio")]
+                        {
+                            st.audio_level = state.audio.level();
+                        }
                     }
                 }
                 *state.last_frame.borrow_mut() = now;

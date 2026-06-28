@@ -9,6 +9,9 @@ use crate::config::DeviceConfig;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
 
+#[cfg(feature = "audio")]
+use crate::audio::{maybe_modulate, AudioSnapshot};
+
 pub fn parse_color(hex: &str) -> anyhow::Result<[u8; 3]> {
     let s = hex.trim_start_matches('#');
     anyhow::ensure!(s.len() == 6, "color must be 6 hex digits, got {s}");
@@ -113,6 +116,7 @@ pub fn run_controlled(
     cancel: Arc<AtomicBool>,
     status: Arc<Mutex<DaemonStatus>>,
     _preview: Arc<Mutex<Vec<u8>>>,
+    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     while !cancel.load(Ordering::Relaxed)
         && config.read().unwrap().effect.mode == EffectMode::Solid
@@ -131,6 +135,9 @@ pub fn run_controlled(
             let scaled = scale_rgb(color, cfg.effect.brightness);
             scaled.iter().cycle().take(n * 3).copied().collect()
         };
+        let mut rgb = rgb;
+        #[cfg(feature = "audio")]
+        maybe_modulate(&mut rgb, n, &cfg, &audio);
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
         {
@@ -144,6 +151,10 @@ pub fn run_controlled(
                 format!("#{}", cfg.solid.color)
             };
             st.color = cfg.solid.color.clone();
+            #[cfg(feature = "audio")]
+            {
+                st.audio_level = audio.level();
+            }
         }
         thread::sleep(interval);
     }

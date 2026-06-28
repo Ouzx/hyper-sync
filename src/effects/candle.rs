@@ -11,6 +11,9 @@ use crate::effects::solid::{is_rainbow_color, resolve_pixel_color, scale_rgb};
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
 
+#[cfg(feature = "audio")]
+use crate::audio::{maybe_modulate, AudioSnapshot};
+
 pub fn run(cfg: DeviceConfig, warmth: f32, speed: f32, fps: u32) -> anyhow::Result<()> {
     let n = usize::from(cfg.leds);
     let mut flicker: Vec<f32> = vec![1.0; n];
@@ -55,6 +58,7 @@ pub fn run_controlled(
     cancel: Arc<AtomicBool>,
     status: Arc<Mutex<DaemonStatus>>,
     preview: Arc<Mutex<Vec<u8>>>,
+    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     let n = config.read().unwrap().device.leds as usize;
     let mut flicker: Vec<f32> = vec![1.0; n];
@@ -87,6 +91,8 @@ pub fn run_controlled(
             rgb.push((base[1] * gain).min(255.0) as u8);
             rgb.push((base[2] * gain).min(255.0) as u8);
         }
+        #[cfg(feature = "audio")]
+        maybe_modulate(&mut rgb, n, &cfg, &audio);
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
         *preview.lock().unwrap() = rgb.clone();
@@ -98,6 +104,10 @@ pub fn run_controlled(
             st.serial_ok = true;
             st.detail = "candle".into();
             st.color = cfg.solid.color.clone();
+            #[cfg(feature = "audio")]
+            {
+                st.audio_level = audio.level();
+            }
         }
         thread::sleep(interval);
     }

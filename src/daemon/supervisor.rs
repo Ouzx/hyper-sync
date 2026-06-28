@@ -12,6 +12,9 @@ use crate::serial::SerialWriter;
 #[cfg(feature = "screen")]
 use crate::capture::worker::{ScreenWorker, WorkerState};
 
+#[cfg(feature = "audio")]
+use crate::audio::AudioSnapshot;
+
 pub struct Supervisor {
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
@@ -20,6 +23,8 @@ pub struct Supervisor {
     handle: Option<JoinHandle<()>>,
     last_effect_key: String,
     last_mode: EffectMode,
+    #[cfg(feature = "audio")]
+    audio: Arc<AudioSnapshot>,
     #[cfg(feature = "screen")]
     screen: ScreenWorker,
     #[cfg(feature = "screen")]
@@ -29,7 +34,11 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn new(config: Arc<RwLock<RuntimeConfig>>, status: Arc<Mutex<DaemonStatus>>) -> Self {
+    pub fn new(
+        config: Arc<RwLock<RuntimeConfig>>,
+        status: Arc<Mutex<DaemonStatus>>,
+        #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
+    ) -> Self {
         let cfg = config.read().unwrap().clone();
         let writer = Arc::new(Mutex::new(SerialWriter::new(cfg.device_config())));
         #[cfg(feature = "screen")]
@@ -37,6 +46,8 @@ impl Supervisor {
             Arc::clone(&config),
             Arc::clone(&status),
             Arc::clone(&writer),
+            #[cfg(feature = "audio")]
+            Arc::clone(&audio),
         );
         Self {
             config,
@@ -46,6 +57,8 @@ impl Supervisor {
             handle: None,
             last_effect_key: String::new(),
             last_mode: cfg.effect.mode,
+            #[cfg(feature = "audio")]
+            audio,
             #[cfg(feature = "screen")]
             screen,
             #[cfg(feature = "screen")]
@@ -141,6 +154,7 @@ impl Supervisor {
             st.fps = cfg.effect.fps;
             st.speed = cfg.effect.speed;
             st.color = cfg.solid.color.clone();
+            st.sound_mode = cfg.audio.sound_mode.as_str().to_string();
             st.last_error = None;
         }
 
@@ -167,17 +181,39 @@ impl Supervisor {
         let status = Arc::clone(&self.status);
         let writer = Arc::clone(&self.writer);
         let preview = Arc::new(Mutex::new(Vec::new()));
+        #[cfg(feature = "audio")]
+        let audio = Arc::clone(&self.audio);
 
         let mode = cfg.effect.mode;
         let status_err = Arc::clone(&status);
         self.handle = Some(thread::spawn(move || {
             let result = match mode {
                 EffectMode::Off => run_off(&writer, &config, &cancel),
-                EffectMode::Solid | EffectMode::Rainbow => {
-                    solid::run_controlled(writer, config, cancel, status, preview)
-                }
+                EffectMode::Solid | EffectMode::Rainbow => solid::run_controlled(
+                    writer,
+                    config,
+                    cancel,
+                    status,
+                    preview,
+                    #[cfg(feature = "audio")]
+                    audio,
+                ),
                 EffectMode::Candle => crate::effects::candle::run_controlled(
-                    writer, config, cancel, status, preview,
+                    writer,
+                    config,
+                    cancel,
+                    status,
+                    preview,
+                    #[cfg(feature = "audio")]
+                    audio,
+                ),
+                EffectMode::SoundViz => crate::effects::sound_viz::run_controlled(
+                    writer,
+                    config,
+                    cancel,
+                    status,
+                    #[cfg(feature = "audio")]
+                    audio,
                 ),
                 EffectMode::Chase
                 | EffectMode::Wave
@@ -190,7 +226,13 @@ impl Supervisor {
                 | EffectMode::Segment
                 | EffectMode::Strobe
                 | EffectMode::Wipe => crate::effects::animated::run_controlled(
-                    mode, writer, config, cancel, status,
+                    mode,
+                    writer,
+                    config,
+                    cancel,
+                    status,
+                    #[cfg(feature = "audio")]
+                    audio,
                 ),
                 EffectMode::Screen | EffectMode::ScreenCenter => {
                     unreachable!("screen uses worker")
