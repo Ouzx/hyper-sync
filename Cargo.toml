@@ -10,8 +10,12 @@ name = "hyper-sync"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["screen", "daemon"]
 screen = ["dep:ashpd", "dep:pipewire", "dep:tokio"]
+daemon = ["dep:serde_json", "dep:notify", "dep:tokio", "dep:ctrlc"]
+tui = ["daemon", "dep:ratatui", "dep:crossterm"]
+tray = ["daemon", "dep:ksni", "dep:image"]
+full = ["screen", "daemon", "tui", "tray"]
 
 [dependencies]
 anyhow = "1"
@@ -22,6 +26,13 @@ serialport = "4"
 ashpd = { version = "0.9", default-features = false, features = ["tokio"], optional = true }
 pipewire = { version = "0.10", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+serde_json = { version = "1", optional = true }
+notify = { version = "8", optional = true }
+ctrlc = { version = "3", optional = true }
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+ksni = { version = "0.3", features = ["blocking"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [profile.release]
 lto = true

@@ -1,3 +1,10 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::Duration;
+
+use crate::config::RuntimeConfig;
+use crate::daemon::DaemonStatus;
 use crate::config::DeviceConfig;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
@@ -57,5 +64,34 @@ pub fn run_off(cfg: DeviceConfig) -> anyhow::Result<()> {
     let frame = crate::protocol::black_frame(cfg.leds);
     let mut writer = SerialWriter::new(cfg);
     writer.write_frame(&frame)?;
+    Ok(())
+}
+
+pub fn run_controlled(
+    writer: Arc<Mutex<SerialWriter>>,
+    config: Arc<RwLock<RuntimeConfig>>,
+    cancel: Arc<AtomicBool>,
+    status: Arc<Mutex<DaemonStatus>>,
+    _preview: Arc<Mutex<Vec<u8>>>,
+) -> anyhow::Result<()> {
+    while !cancel.load(Ordering::Relaxed) {
+        let cfg = config.read().unwrap().clone();
+        let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
+        let color = parse_color(&cfg.solid.color)?;
+        let scaled = scale_rgb(color, cfg.effect.brightness);
+        let n = usize::from(cfg.device.leds);
+        let rgb: Vec<u8> = scaled.iter().cycle().take(n * 3).copied().collect();
+        let frame = build_frame(cfg.device.leds, &rgb)?;
+        writer.lock().unwrap().write_frame(&frame)?;
+        {
+            let mut st = status.lock().unwrap();
+            st.brightness = cfg.effect.brightness;
+            st.fps = cfg.effect.fps;
+            st.serial_ok = true;
+            st.detail = format!("#{}", cfg.solid.color);
+            st.color = cfg.solid.color.clone();
+        }
+        thread::sleep(interval);
+    }
     Ok(())
 }

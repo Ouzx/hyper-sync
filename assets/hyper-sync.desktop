@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=hyper-sync
+Comment=Skydimo LED sync daemon
+Exec=hyper-sync daemon
+Icon=hyper-sync
+Terminal=false
+Categories=Utility;
+X-KDE-StartupNotify=false
+X-KDE-autostart-after=panel

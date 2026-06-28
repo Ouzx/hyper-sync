@@ -1,9 +1,15 @@
 #[cfg(feature = "screen")]
 mod capture;
 mod config;
+#[cfg(feature = "daemon")]
+mod daemon;
 mod effects;
 mod protocol;
 mod serial;
+#[cfg(feature = "tui")]
+mod tui;
+#[cfg(feature = "tray")]
+mod tray;
 
 use std::path::PathBuf;
 
@@ -12,6 +18,9 @@ use config::DeviceConfig;
 
 #[cfg(feature = "screen")]
 use anyhow::Context;
+
+#[cfg(feature = "daemon")]
+use daemon::{daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse};
 
 #[derive(Parser)]
 #[command(name = "hyper-sync", about = "Low-latency Skydimo LED sync")]
@@ -22,6 +31,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Background daemon (tray icon by default)
+    #[cfg(feature = "daemon")]
+    Daemon {
+        #[arg(long, help = "Do not show system tray icon")]
+        no_tray: bool,
+    },
+    /// Interactive control panel (daemon keeps running on quit)
+    #[cfg(feature = "tui")]
+    Tui,
+    /// Control the running daemon
+    #[cfg(feature = "daemon")]
+    Ctl {
+        #[command(subcommand)]
+        action: CtlAction,
+    },
+    /// Quit the running daemon (alias for `ctl quit`)
+    #[cfg(feature = "daemon")]
+    Quit,
     /// Solid color on all LEDs
     Solid {
         #[arg(long, default_value = config::DEFAULT_PORT)]
@@ -74,10 +101,43 @@ enum Commands {
     },
 }
 
+#[cfg(feature = "daemon")]
+#[derive(Subcommand)]
+enum CtlAction {
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Stop,
+    Restart,
+    Quit,
+    Set {
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long)]
+        brightness: Option<f32>,
+        #[arg(long)]
+        color: Option<String>,
+        #[arg(long)]
+        fps: Option<u32>,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        #[cfg(feature = "daemon")]
+        Commands::Daemon { no_tray } => {
+            write_default_config_if_missing()?;
+            daemon::run(!no_tray)
+        }
+        #[cfg(feature = "tui")]
+        Commands::Tui => tui::run(),
+        #[cfg(feature = "daemon")]
+        Commands::Quit => run_ctl(CtlAction::Quit),
+        #[cfg(feature = "daemon")]
+        Commands::Ctl { action } => run_ctl(action),
         Commands::Solid {
             port,
             leds,
@@ -85,6 +145,17 @@ fn main() -> anyhow::Result<()> {
             brightness,
             fps,
         } => {
+            #[cfg(feature = "daemon")]
+            if try_ipc_legacy(|| {
+                patch_config(IpcRequest::Patch {
+                    mode: Some("solid".into()),
+                    brightness: Some(brightness),
+                    color: Some(color.clone()),
+                    fps: Some(fps),
+                })
+            })? {
+                return Ok(());
+            }
             let rgb = effects::solid::parse_color(&color)?;
             effects::solid::run(
                 DeviceConfig {
@@ -97,27 +168,47 @@ fn main() -> anyhow::Result<()> {
                 fps,
             )
         }
-        Commands::Off { port, leds } => effects::solid::run_off(DeviceConfig {
-            port,
-            baud: config::DEFAULT_BAUD,
-            leds,
-        }),
+        Commands::Off { port, leds } => {
+            #[cfg(feature = "daemon")]
+            if try_ipc_legacy(|| patch_config(IpcRequest::Stop))? {
+                return Ok(());
+            }
+            effects::solid::run_off(DeviceConfig {
+                port,
+                baud: config::DEFAULT_BAUD,
+                leds,
+            })
+        }
         Commands::Candle {
             port,
             leds,
             warmth,
             speed,
             fps,
-        } => effects::candle::run(
-            DeviceConfig {
-                port,
-                baud: config::DEFAULT_BAUD,
-                leds,
-            },
-            warmth,
-            speed,
-            fps,
-        ),
+        } => {
+            #[cfg(feature = "daemon")]
+            if try_ipc_legacy(|| {
+                let _ = (warmth, speed);
+                patch_config(IpcRequest::Patch {
+                    mode: Some("candle".into()),
+                    brightness: None,
+                    color: None,
+                    fps: Some(fps),
+                })
+            })? {
+                return Ok(());
+            }
+            effects::candle::run(
+                DeviceConfig {
+                    port,
+                    baud: config::DEFAULT_BAUD,
+                    leds,
+                },
+                warmth,
+                speed,
+                fps,
+            )
+        }
         Commands::Screen {
             port,
             leds,
@@ -127,6 +218,17 @@ fn main() -> anyhow::Result<()> {
             layout,
             forget_portal,
         } => {
+            #[cfg(feature = "daemon")]
+            if try_ipc_legacy(|| {
+                patch_config(IpcRequest::Patch {
+                    mode: Some("screen".into()),
+                    brightness: Some(brightness),
+                    color: None,
+                    fps: Some(fps),
+                })
+            })? {
+                return Ok(());
+            }
             #[cfg(feature = "screen")]
             {
                 let layout_path = config::resolve_layout_path(layout.as_path());
@@ -154,6 +256,62 @@ fn main() -> anyhow::Result<()> {
                     "screen mode requires building with --features screen (needs pipewire-devel + gcc)"
                 )
             }
+        }
+    }
+}
+
+#[cfg(feature = "daemon")]
+fn try_ipc_legacy(f: impl FnOnce() -> anyhow::Result<IpcResponse>) -> anyhow::Result<bool> {
+    if !daemon_running() {
+        return Ok(false);
+    }
+    f()?;
+    Ok(true)
+}
+
+#[cfg(feature = "daemon")]
+fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
+    match action {
+        CtlAction::Status { json } => {
+            let resp = ipc_request(&IpcRequest::Status)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            } else if let Some(st) = resp.status {
+                println!(
+                    "effect={} brightness={:.2} fps={} serial_ok={} detail={}",
+                    st.effect, st.brightness, st.fps, st.serial_ok, st.detail
+                );
+                if let Some(err) = st.last_error {
+                    println!("last_error={err}");
+                }
+            }
+            Ok(())
+        }
+        CtlAction::Stop => {
+            ipc_request(&IpcRequest::Stop)?;
+            Ok(())
+        }
+        CtlAction::Restart => {
+            ipc_request(&IpcRequest::Restart)?;
+            Ok(())
+        }
+        CtlAction::Quit => {
+            ipc_request(&IpcRequest::Quit)?;
+            Ok(())
+        }
+        CtlAction::Set {
+            mode,
+            brightness,
+            color,
+            fps,
+        } => {
+            ipc_request(&IpcRequest::Patch {
+                mode,
+                brightness,
+                color,
+                fps,
+            })?;
+            Ok(())
         }
     }
 }

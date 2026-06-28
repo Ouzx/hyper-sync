@@ -1,0 +1,19 @@
+[device]
+port = "/dev/ttyUSB0"
+leds = 65
+
+[effect]
+mode = "screen"
+brightness = 0.2
+fps = 30
+
+[solid]
+color = "ff3300"
+
+[candle]
+warmth = 0.9
+speed = 1.0
+
+[screen]
+monitor = 0
+layout = "config/layout.toml"
