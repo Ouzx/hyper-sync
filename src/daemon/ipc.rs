@@ -256,6 +256,7 @@ fn parse_mode(s: &str) -> anyhow::Result<crate::config::EffectMode> {
         "strobe" => EffectMode::Strobe,
         "wipe" => EffectMode::Wipe,
         "screen" => EffectMode::Screen,
+        "screen_center" => EffectMode::ScreenCenter,
         other => anyhow::bail!("unknown mode {other}"),
     })
 }

@@ -355,6 +355,7 @@ pub fn run(
 }
 
 pub fn run_controlled(
+    mode: crate::config::EffectMode,
     writer: Arc<Mutex<SerialWriter>>,
     config: Arc<RwLock<RuntimeConfig>>,
     cancel: Arc<AtomicBool>,
@@ -379,18 +380,23 @@ pub fn run_controlled(
         config::clear_portal_token()?;
         config.write().unwrap().screen.forget_portal = false;
     }
-    let layout_path = layout_path
-        .to_str()
-        .context("layout path is not valid UTF-8")?;
 
-    let layout = LayoutConfig::load(layout_path)?;
-    let zones = layout.edge_zones();
-    anyhow::ensure!(
-        zones.len() == usize::from(layout.led_count),
-        "layout zone count {} != led_count {}",
-        zones.len(),
-        layout.led_count
-    );
+    let zones = if mode == crate::config::EffectMode::Screen {
+        let layout_path = layout_path
+            .to_str()
+            .context("layout path is not valid UTF-8")?;
+        let layout = LayoutConfig::load(layout_path)?;
+        let zones = layout.edge_zones();
+        anyhow::ensure!(
+            zones.len() == usize::from(layout.led_count),
+            "layout zone count {} != led_count {}",
+            zones.len(),
+            layout.led_count
+        );
+        Rc::new(zones)
+    } else {
+        Rc::new(vec![])
+    };
 
     let rt = tokio::runtime::Runtime::new().context("tokio runtime")?;
     if cancel.load(Ordering::Relaxed) {
@@ -437,7 +443,7 @@ pub fn run_controlled(
     let state = Rc::new(CtrlFrameState {
         writer,
         config: Arc::clone(&config),
-        zones: Rc::new(zones),
+        zones,
         format: RefCell::new(None),
         width: width.clone(),
         height: height.clone(),
@@ -499,10 +505,12 @@ pub fn run_controlled(
             let w = width.clone();
             let h = height.clone();
             move |stream, state| {
-                if state.cancel.load(Ordering::Relaxed)
-                    || state.config.read().unwrap().effect.mode
-                        != crate::config::EffectMode::Screen
-                {
+                if state.cancel.load(Ordering::Relaxed) {
+                    unsafe { pw::sys::pw_main_loop_quit(state.mainloop_ptr) };
+                    return;
+                }
+                let mode = state.config.read().unwrap().effect.mode;
+                if !mode.is_screen() {
                     unsafe { pw::sys::pw_main_loop_quit(state.mainloop_ptr) };
                     return;
                 }
@@ -530,7 +538,16 @@ pub fn run_controlled(
                     return;
                 };
 
-                let mut rgb = sample::sample_edges(datas, format, width, height, &state.zones);
+                let mut rgb = match mode {
+                    crate::config::EffectMode::ScreenCenter => sample::sample_center(
+                        datas,
+                        format,
+                        width,
+                        height,
+                        cfg.device.leds,
+                    ),
+                    _ => sample::sample_edges(datas, format, width, height, &state.zones),
+                };
                 scale_rgb_buf(&mut rgb, cfg.effect.brightness);
                 let leds = cfg.device.leds;
                 drop(cfg);

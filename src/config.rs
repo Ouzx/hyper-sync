@@ -56,6 +56,8 @@ pub enum EffectMode {
     Strobe,
     Wipe,
     Screen,
+    #[serde(rename = "screen_center")]
+    ScreenCenter,
 }
 
 impl EffectMode {
@@ -77,7 +79,12 @@ impl EffectMode {
             Self::Strobe => "strobe",
             Self::Wipe => "wipe",
             Self::Screen => "screen",
+            Self::ScreenCenter => "screen_center",
         }
+    }
+
+    pub fn is_screen(self) -> bool {
+        matches!(self, Self::Screen | Self::ScreenCenter)
     }
 }
 
@@ -248,8 +255,14 @@ impl RuntimeConfig {
             EffectMode::Wipe => "wipe".into(),
             #[cfg(feature = "screen")]
             EffectMode::Screen => format!("screen:{}:{}", self.screen.monitor, self.screen.layout),
+            #[cfg(feature = "screen")]
+            EffectMode::ScreenCenter => {
+                format!("screen_center:{}:{}", self.screen.monitor, self.screen.layout)
+            }
             #[cfg(not(feature = "screen"))]
             EffectMode::Screen => "screen".into(),
+            #[cfg(not(feature = "screen"))]
+            EffectMode::ScreenCenter => "screen_center".into(),
         }
     }
 }

@@ -108,11 +108,11 @@ impl Supervisor {
                 | EffectMode::Wipe => crate::effects::animated::run_controlled(
                     mode, writer, config, cancel, status,
                 ),
-                EffectMode::Screen => {
+                EffectMode::Screen | EffectMode::ScreenCenter => {
                     #[cfg(feature = "screen")]
                     {
                         crate::capture::screen::run_controlled(
-                            writer, config, cancel, status, preview,
+                            mode, writer, config, cancel, status, preview,
                         )
                     }
                     #[cfg(not(feature = "screen"))]

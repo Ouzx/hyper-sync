@@ -17,8 +17,23 @@ use crate::daemon::{daemon_running, ipc_request, IpcRequest};
 use crate::effects::solid::parse_color;
 
 const MODES: &[&str] = &[
-    "off", "solid", "candle", "chase", "wave", "rainbow", "scanner", "sparkle", "pulse",
-    "aurora", "fire", "heartbeat", "segment", "strobe", "wipe", "screen",
+    "off",
+    "screen",
+    "screen_center",
+    "solid",
+    "candle",
+    "chase",
+    "wave",
+    "rainbow",
+    "scanner",
+    "sparkle",
+    "pulse",
+    "aurora",
+    "fire",
+    "heartbeat",
+    "segment",
+    "strobe",
+    "wipe",
 ];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "000000",
@@ -98,7 +113,7 @@ impl Default for UiState {
             serial_ok: true,
             last_error: None,
             color_idx: 0,
-            list_cursor: MODES.len() - 1,
+            list_cursor: 1,
             digit_buf: String::new(),
             list_scroll: 0,
         }
@@ -122,20 +137,20 @@ fn tui_loop() -> anyhow::Result<()> {
                         }
                     }
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Up | KeyCode::Char('k') => move_list_cursor(&mut state, -1),
-                    KeyCode::Down | KeyCode::Char('j') => move_list_cursor(&mut state, 1),
+                    KeyCode::Up => {
+                        adjust_brightness(0.05).ok();
+                    }
+                    KeyCode::Down => {
+                        adjust_brightness(-0.05).ok();
+                    }
+                    KeyCode::Char('k') => move_list_cursor(&mut state, -1),
+                    KeyCode::Char('j') => move_list_cursor(&mut state, 1),
                     KeyCode::Enter | KeyCode::Char(' ') => select_effect(&mut state),
                     KeyCode::Char(c) if c.is_ascii_digit() => {
                         state.digit_buf.push(c);
                         if state.digit_buf.len() >= 2 {
                             select_effect(&mut state);
                         }
-                    }
-                    KeyCode::Char('+') | KeyCode::Char('=') => {
-                        adjust_brightness(0.05).ok();
-                    }
-                    KeyCode::Char('-') | KeyCode::Char('_') => {
-                        adjust_brightness(-0.05).ok();
                     }
                     KeyCode::Left => cycle_color(&mut state, -1),
                     KeyCode::Right => cycle_color(&mut state, 1),
@@ -312,7 +327,8 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
             Constraint::Length(6),
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Min(5),
+            Constraint::Length(5),
+            Constraint::Min(0),
             Constraint::Length(2),
         ])
         .split(area);
@@ -331,7 +347,7 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
     };
 
     let mut controls = vec![
-        Line::from(format!("Brightness  {:.2}   +/- adjust", state.brightness)),
+        Line::from(format!("Brightness  {:.2}   ↑↓ adjust", state.brightness)),
         Line::from(format!("FPS        {}", state.fps)),
         Line::from(format!("Active     {}", state.effect)),
         Line::from(format!("Status     {status_line}")),
@@ -370,9 +386,9 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
     draw_color_picker(f, chunks[3], state);
 
     f.render_widget(
-        Paragraph::new("+/- brightness · ←→ color · [ ] speed · j/k select · #+Enter effect")
+        Paragraph::new("↑↓ brightness · ←→ color · [ ] speed · j/k select · #+Enter effect")
             .style(Style::default().fg(Color::DarkGray)),
-        chunks[4],
+        chunks[5],
     );
 }
 
@@ -413,6 +429,7 @@ fn draw_effect_list(f: &mut Frame, area: Rect, state: &mut UiState) {
         let chevron = if is_cursor { "▶" } else { " " };
         let num = format!("{:2}", idx + 1);
         let label = mode_label(mode);
+        let screen_sync = is_screen_sync(mode);
         let line = Line::from(vec![
             Span::styled(
                 format!("{chevron} {num} "),
@@ -426,15 +443,7 @@ fn draw_effect_list(f: &mut Frame, area: Rect, state: &mut UiState) {
             ),
             Span::styled(
                 label,
-                if is_active {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else if is_cursor {
-                    Style::default().fg(Color::White)
-                } else {
-                    Style::default()
-                },
+                effect_label_style(is_active, is_cursor, screen_sync),
             ),
         ]);
 
@@ -457,19 +466,50 @@ fn draw_effect_list(f: &mut Frame, area: Rect, state: &mut UiState) {
 }
 
 fn mode_label(mode: &str) -> String {
-    let mut chars = mode.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    match mode {
+        "off" => "Off".into(),
+        "screen" => "Screen Sync".into(),
+        "screen_center" => "Screen Sync Center".into(),
+        "solid" => "Solid".into(),
+        "candle" => "Candle".into(),
+        "chase" => "Chase".into(),
+        "wave" => "Wave".into(),
+        "rainbow" => "Rainbow".into(),
+        "scanner" => "Scanner".into(),
+        "sparkle" => "Sparkle".into(),
+        "pulse" => "Pulse".into(),
+        "aurora" => "Aurora".into(),
+        "fire" => "Fire".into(),
+        "heartbeat" => "Heartbeat".into(),
+        "segment" => "Segment".into(),
+        "strobe" => "Strobe".into(),
+        "wipe" => "Wipe".into(),
+        _ => mode.into(),
+    }
+}
+
+fn is_screen_sync(mode: &str) -> bool {
+    mode == "screen" || mode == "screen_center"
+}
+
+fn effect_label_style(is_active: bool, is_cursor: bool, screen_sync: bool) -> Style {
+    if is_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else if screen_sync {
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+    } else if is_cursor {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default()
     }
 }
 
 fn uses_speed(effect: &str) -> bool {
-    effect != "off" && effect != "solid" && effect != "screen"
+    effect != "off" && effect != "solid" && !is_screen_sync(effect)
 }
 
 fn uses_accent_color(effect: &str) -> bool {
-    effect != "off" && effect != "screen" && effect != "rainbow"
+    effect != "off" && !is_screen_sync(effect) && effect != "rainbow"
 }
 
 fn color_picker_enabled(effect: &str) -> bool {

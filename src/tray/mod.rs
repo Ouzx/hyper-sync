@@ -62,9 +62,12 @@ impl Tray for HyperTray {
             MenuItem::SubMenu(SubMenu {
                 label: "Effect".into(),
                 submenu: vec![
+                    patch_item("Off", "off"),
+                    patch_item("Screen Sync", "screen"),
+                    patch_item("Screen Sync Center", "screen_center"),
                     MenuItem::SubMenu(SubMenu {
                         label: "Static".into(),
-                        submenu: vec![patch_item("Off", "off"), patch_item("Solid", "solid")],
+                        submenu: vec![patch_item("Solid", "solid")],
                         ..Default::default()
                     }),
                     MenuItem::SubMenu(SubMenu {
@@ -92,7 +95,6 @@ impl Tray for HyperTray {
                         ],
                         ..Default::default()
                     }),
-                    patch_item("Screen sync", "screen"),
                 ],
                 ..Default::default()
             }),
