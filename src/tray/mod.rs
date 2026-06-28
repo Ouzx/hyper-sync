@@ -78,7 +78,6 @@ impl Tray for HyperTray {
                             patch_item("Pulse", "pulse"),
                             patch_item("Aurora", "aurora"),
                             patch_item("Fire", "fire"),
-                            patch_item("Rainbow", "rainbow"),
                         ],
                         ..Default::default()
                     }),
@@ -115,6 +114,7 @@ impl Tray for HyperTray {
                     color_item("Warm orange", "ff3300"),
                     color_item("Red", "ff0000"),
                     color_item("White", "ffffff"),
+                    color_item("Rainbow", "rainbow"),
                 ],
                 ..Default::default()
             }),

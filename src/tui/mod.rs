@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use ratatui::Frame;
 
 use crate::daemon::{daemon_running, ipc_request, IpcRequest};
-use crate::effects::solid::parse_color;
+use crate::effects::solid::{is_rainbow_color, parse_color, rainbow_pixel};
 
 const MODES: &[&str] = &[
     "off",
@@ -24,7 +24,6 @@ const MODES: &[&str] = &[
     "candle",
     "chase",
     "wave",
-    "rainbow",
     "scanner",
     "sparkle",
     "pulse",
@@ -36,7 +35,7 @@ const MODES: &[&str] = &[
     "wipe",
 ];
 const COLOR_PRESETS: &[&str] = &[
-    "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "000000",
+    "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "rainbow",
 ];
 const SPEED_MIN: f32 = 0.1;
 const SPEED_MAX: f32 = 5.0;
@@ -494,7 +493,6 @@ fn mode_label(mode: &str) -> String {
         "candle" => "Candle".into(),
         "chase" => "Chase".into(),
         "wave" => "Wave".into(),
-        "rainbow" => "Rainbow".into(),
         "scanner" => "Scanner".into(),
         "sparkle" => "Sparkle".into(),
         "pulse" => "Pulse".into(),
@@ -529,28 +527,52 @@ fn uses_speed(effect: &str) -> bool {
 }
 
 fn uses_accent_color(effect: &str) -> bool {
-    effect != "off" && !is_screen_sync(effect) && effect != "rainbow"
+    effect != "off" && !is_screen_sync(effect)
 }
 
 fn color_picker_enabled(effect: &str) -> bool {
     uses_accent_color(effect)
 }
 
+fn rainbow_letter_spans(text: &str, selected: bool) -> Vec<Span<'static>> {
+    let modifier = if selected {
+        Modifier::BOLD | Modifier::UNDERLINED
+    } else {
+        Modifier::empty()
+    };
+    let letter_count = text.chars().filter(|c| c.is_ascii_alphabetic()).count().max(1);
+    let mut letter_i = 0;
+    text.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphabetic() {
+                let [r, g, b] = rainbow_pixel(letter_i, letter_count);
+                letter_i += 1;
+                Span::styled(
+                    ch.to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(r, g, b))
+                        .add_modifier(modifier),
+                )
+            } else {
+                Span::raw(ch.to_string())
+            }
+        })
+        .collect()
+}
+
 fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
     let enabled = color_picker_enabled(&state.effect);
-    let title = if enabled {
-        "color"
-    } else if state.effect == "rainbow" {
-        "color (auto hue in rainbow)"
-    } else {
-        "color (not used in this mode)"
-    };
+    let title = if enabled { "color" } else { "color (not used in this mode)" };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     let dim = Style::default().fg(Color::DarkGray);
     f.render_widget(block, area);
 
-    let rgb = parse_color(&state.color).unwrap_or([255, 51, 0]);
+    let rgb = if is_rainbow_color(&state.color) {
+        rainbow_pixel(2, 8)
+    } else {
+        parse_color(&state.color).unwrap_or([255, 51, 0])
+    };
     let swatch = Rect {
         x: inner.x,
         y: inner.y,
@@ -565,45 +587,67 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
     let preset_line: Vec<Span> = COLOR_PRESETS
         .iter()
         .enumerate()
-        .flat_map(|(i, hex)| {
-            let c = parse_color(hex).unwrap_or([128, 128, 128]);
-            let label = if i == state.color_idx {
-                format!("[#{hex}]")
+        .flat_map(|(i, preset)| {
+            let selected = i == state.color_idx;
+            if is_rainbow_color(preset) {
+                let label = if selected {
+                    "[rainbow]"
+                } else {
+                    " rainbow "
+                };
+                rainbow_letter_spans(label, selected)
+                    .into_iter()
+                    .chain([Span::raw(" ")])
+                    .collect::<Vec<_>>()
             } else {
-                format!(" #{hex} ")
-            };
-            [
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(Color::Rgb(c[0], c[1], c[2]))
-                        .add_modifier(if i == state.color_idx {
-                            Modifier::BOLD | Modifier::UNDERLINED
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::raw(" "),
-            ]
+                let c = parse_color(preset).unwrap_or([128, 128, 128]);
+                let label = if selected {
+                    format!("[#{preset}]")
+                } else {
+                    format!(" #{preset} ")
+                };
+                vec![
+                    Span::styled(
+                        label,
+                        Style::default()
+                            .fg(Color::Rgb(c[0], c[1], c[2]))
+                            .add_modifier(if selected {
+                                Modifier::BOLD | Modifier::UNDERLINED
+                            } else {
+                                Modifier::empty()
+                            }),
+                    ),
+                    Span::raw(" "),
+                ]
+            }
         })
         .collect();
 
+    let current_line: Line = if enabled && is_rainbow_color(&state.color) {
+        Line::from(
+            rainbow_letter_spans("rainbow", true)
+                .into_iter()
+                .chain([Span::raw("  (←→ pick)")])
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        Line::from(Span::styled(
+            if enabled {
+                format!("#{}  (←→ pick)", state.color)
+            } else {
+                format!("#{}  (not used in this mode)", state.color)
+            },
+            if enabled {
+                Style::default()
+            } else {
+                dim
+            },
+        ))
+    };
+
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                if enabled {
-                    format!("#{}  (←→ pick)", state.color)
-                } else if state.effect == "rainbow" {
-                    format!("#{}  (rainbow ignores color)", state.color)
-                } else {
-                    format!("#{}  (not used in this mode)", state.color)
-                },
-                if enabled {
-                    Style::default()
-                } else {
-                    dim
-                },
-            )),
+            current_line,
             Line::from(if enabled {
                 preset_line
             } else {

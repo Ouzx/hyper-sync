@@ -19,6 +19,46 @@ pub fn parse_color(hex: &str) -> anyhow::Result<[u8; 3]> {
     ])
 }
 
+pub fn is_rainbow_color(s: &str) -> bool {
+    s.eq_ignore_ascii_case("rainbow")
+}
+
+pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let h = h.fract().max(0.0);
+    let i = (h * 6.0).floor() as i32;
+    let f = h * 6.0 - i as f32;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+    let (r, g, b) = match i % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    [
+        (r * 255.0) as u8,
+        (g * 255.0) as u8,
+        (b * 255.0) as u8,
+    ]
+}
+
+/// Fixed hue per LED index along the strip (not animated).
+pub fn rainbow_pixel(i: usize, n: usize) -> [u8; 3] {
+    let hue = i as f32 / n.max(1) as f32;
+    hsv_to_rgb(hue, 1.0, 1.0)
+}
+
+pub fn resolve_pixel_color(i: usize, n: usize, accent: &str) -> [u8; 3] {
+    if is_rainbow_color(accent) {
+        rainbow_pixel(i, n)
+    } else {
+        parse_color(accent).unwrap_or([255, 51, 0])
+    }
+}
+
 pub fn scale_rgb(rgb: [u8; 3], brightness: f32) -> [u8; 3] {
     let b = brightness.clamp(0.0, 1.0);
     [
@@ -79,10 +119,18 @@ pub fn run_controlled(
     {
         let cfg = config.read().unwrap().clone();
         let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
-        let color = parse_color(&cfg.solid.color)?;
-        let scaled = scale_rgb(color, cfg.effect.brightness);
         let n = usize::from(cfg.device.leds);
-        let rgb: Vec<u8> = scaled.iter().cycle().take(n * 3).copied().collect();
+        let rgb: Vec<u8> = if is_rainbow_color(&cfg.solid.color) {
+            (0..n)
+                .flat_map(|i| {
+                    scale_rgb(rainbow_pixel(i, n), cfg.effect.brightness).into_iter()
+                })
+                .collect()
+        } else {
+            let color = parse_color(&cfg.solid.color)?;
+            let scaled = scale_rgb(color, cfg.effect.brightness);
+            scaled.iter().cycle().take(n * 3).copied().collect()
+        };
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
         {
@@ -90,7 +138,11 @@ pub fn run_controlled(
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
             st.serial_ok = true;
-            st.detail = format!("#{}", cfg.solid.color);
+            st.detail = if is_rainbow_color(&cfg.solid.color) {
+                "rainbow".into()
+            } else {
+                format!("#{}", cfg.solid.color)
+            };
             st.color = cfg.solid.color.clone();
         }
         thread::sleep(interval);

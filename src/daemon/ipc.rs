@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{runtime_config_path, RuntimeConfig};
+use crate::config::{runtime_config_path, EffectMode, RuntimeConfig};
 use super::ReloadMsg;
 use crate::daemon::state::DaemonStatus;
 use crate::config::ipc_socket_path;
@@ -190,7 +190,12 @@ fn handle_client(
             {
                 let mut cfg = config.write().unwrap();
                 if let Some(m) = mode {
-                    cfg.effect.mode = parse_mode(&m)?;
+                    if m == "rainbow" {
+                        cfg.effect.mode = EffectMode::Solid;
+                        cfg.solid.color = "rainbow".into();
+                    } else {
+                        cfg.effect.mode = parse_mode(&m)?;
+                    }
                 }
                 if let Some(b) = brightness {
                     cfg.effect.brightness = b.clamp(0.0, 1.0);
@@ -263,7 +268,6 @@ fn parse_mode(s: &str) -> anyhow::Result<crate::config::EffectMode> {
         "candle" => EffectMode::Candle,
         "chase" => EffectMode::Chase,
         "wave" => EffectMode::Wave,
-        "rainbow" => EffectMode::Rainbow,
         "scanner" => EffectMode::Scanner,
         "sparkle" => EffectMode::Sparkle,
         "pulse" => EffectMode::Pulse,

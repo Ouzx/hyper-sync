@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
 use crate::config::DeviceConfig;
-use crate::effects::solid::{parse_color, scale_rgb};
+use crate::effects::solid::{is_rainbow_color, resolve_pixel_color, scale_rgb};
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
 
@@ -67,17 +67,19 @@ pub fn run_controlled(
         let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
         let warmth = cfg.candle.warmth.clamp(0.0, 1.0);
         let speed = cfg.effect.speed.max(0.1);
-        let tint = parse_color(&cfg.solid.color).unwrap_or([255, 51, 0]);
-        let warm = scale_rgb(tint, 0.35 + 0.65 * warmth);
-        let base = [
-            warm[0] as f32,
-            warm[1] as f32,
-            warm[2] as f32,
-        ];
+        let accent = cfg.solid.color.as_str();
+        let warmth_gain = 0.35 + 0.65 * warmth;
         let t = start.elapsed().as_secs_f32() * speed;
         let breathe = 0.85 + 0.15 * (t * 0.3 * TAU).sin();
         let mut rgb = Vec::with_capacity(n * 3);
         for i in 0..n {
+            let pixel = resolve_pixel_color(i, n, accent);
+            let warm = if is_rainbow_color(accent) {
+                pixel
+            } else {
+                scale_rgb(pixel, warmth_gain)
+            };
+            let base = [warm[0] as f32, warm[1] as f32, warm[2] as f32];
             let target = 0.88 + rand_unit(i, t) * 0.24;
             flicker[i] = flicker[i] * 0.82 + target * 0.18;
             let gain = breathe * flicker[i] * cfg.effect.brightness;

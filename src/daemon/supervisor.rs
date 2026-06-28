@@ -173,7 +173,7 @@ impl Supervisor {
         self.handle = Some(thread::spawn(move || {
             let result = match mode {
                 EffectMode::Off => run_off(&writer, &config, &cancel),
-                EffectMode::Solid => {
+                EffectMode::Solid | EffectMode::Rainbow => {
                     solid::run_controlled(writer, config, cancel, status, preview)
                 }
                 EffectMode::Candle => crate::effects::candle::run_controlled(
@@ -181,7 +181,6 @@ impl Supervisor {
                 ),
                 EffectMode::Chase
                 | EffectMode::Wave
-                | EffectMode::Rainbow
                 | EffectMode::Scanner
                 | EffectMode::Sparkle
                 | EffectMode::Pulse

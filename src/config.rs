@@ -206,7 +206,17 @@ impl RuntimeConfig {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read {}", path.display()))?;
-        toml::from_str(&text).context("parse config.toml")
+        let mut cfg: Self = toml::from_str(&text).context("parse config.toml")?;
+        cfg.normalize_legacy();
+        Ok(cfg)
+    }
+
+    /// `rainbow` was an effect mode; now it's a color accent on any effect.
+    pub fn normalize_legacy(&mut self) {
+        if self.effect.mode == EffectMode::Rainbow {
+            self.effect.mode = EffectMode::Solid;
+            self.solid.color = "rainbow".into();
+        }
     }
 
     pub fn load_or_create_default() -> anyhow::Result<(Self, PathBuf)> {
@@ -243,7 +253,7 @@ impl RuntimeConfig {
             EffectMode::Candle => "candle".into(),
             EffectMode::Chase => "chase".into(),
             EffectMode::Wave => "wave".into(),
-            EffectMode::Rainbow => "rainbow".into(),
+            EffectMode::Rainbow => "solid".into(),
             EffectMode::Scanner => "scanner".into(),
             EffectMode::Sparkle => "sparkle".into(),
             EffectMode::Pulse => "pulse".into(),
