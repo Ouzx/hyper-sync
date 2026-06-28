@@ -164,14 +164,14 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                         }
                     }
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Up => {
+                    KeyCode::Char('w') | KeyCode::Char('W') => {
                         adjust_brightness(0.05).ok();
                     }
-                    KeyCode::Down => {
+                    KeyCode::Char('s') | KeyCode::Char('S') => {
                         adjust_brightness(-0.05).ok();
                     }
-                    KeyCode::Char('k') => move_list_cursor(&mut state, -1),
-                    KeyCode::Char('j') => move_list_cursor(&mut state, 1),
+                    KeyCode::Up => move_list_cursor(&mut state, -1),
+                    KeyCode::Down => move_list_cursor(&mut state, 1),
                     KeyCode::Char(c) if c.is_ascii_digit() => {
                         if state.digit_buf.is_empty() {
                             if let Some(d) = c.to_digit(10) {
@@ -190,26 +190,26 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                     }
                     KeyCode::Left => cycle_color(&mut state, -1),
                     KeyCode::Right => cycle_color(&mut state, 1),
-                    KeyCode::Char('[') => {
+                    KeyCode::Char('a') | KeyCode::Char('A') => {
                         adjust_speed(-0.1).ok();
                     }
-                    KeyCode::Char(']') => {
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
                         adjust_speed(0.1).ok();
                     }
-                    KeyCode::Char('m') | KeyCode::Char('M') => cycle_sound_mode(&mut state),
-                    KeyCode::Char('-') => {
+                    KeyCode::Tab => cycle_sound_mode(&mut state),
+                    KeyCode::Char('j') | KeyCode::Char('J') => {
                         adjust_reactivity(-0.05).ok();
                     }
-                    KeyCode::Char('=') => {
+                    KeyCode::Char('k') | KeyCode::Char('K') => {
                         adjust_reactivity(0.05).ok();
                     }
-                    KeyCode::Char(',') => {
+                    KeyCode::Char('h') | KeyCode::Char('H') => {
                         adjust_sensitivity(-0.05).ok();
                     }
-                    KeyCode::Char('.') => {
+                    KeyCode::Char('l') | KeyCode::Char('L') => {
                         adjust_sensitivity(0.05).ok();
                     }
-                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                    KeyCode::Char('R') => {
                         ipc_request(&IpcRequest::ReselectScreen).ok();
                     }
                     KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -450,67 +450,37 @@ fn sound_enabled(state: &UiState) -> bool {
     state.sound_mode != "off"
 }
 
+fn audio_separator_line() -> Line<'static> {
+    Line::from(Span::styled(
+        "── audio ──────────────────",
+        Style::default().fg(Color::DarkGray),
+    ))
+}
+
 fn draw_ui(f: &mut Frame, state: &mut UiState) {
     let root = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
         .split(f.area());
 
-    draw_controls(f, root[0], state);
+    let status_rows = if sound_enabled(state) { 10 } else { 7 };
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(status_rows),
+            Constraint::Min(3),
+            Constraint::Length(2),
+        ])
+        .split(root[0]);
+
+    draw_status(f, left[0], state);
+    draw_controls_panel(f, left[1], state);
+    draw_legend(f, left[2], state);
     draw_effect_list(f, root[1], state);
 }
 
-fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
+fn draw_status(f: &mut Frame, area: Rect, state: &UiState) {
     let sound_on = sound_enabled(state);
-    let mut constraints = vec![
-        Constraint::Length(if sound_on { 10 } else { 7 }),
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Length(3),
-    ];
-    if sound_on {
-        constraints.push(Constraint::Length(3));
-        constraints.push(Constraint::Length(3));
-    }
-    constraints.extend([
-        Constraint::Length(5),
-        Constraint::Min(0),
-        Constraint::Length(2),
-    ]);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-
-    let mut ci = 0usize;
-    let controls_chunk = chunks[ci];
-    ci += 1;
-    let brightness_chunk = chunks[ci];
-    ci += 1;
-    let speed_chunk = chunks[ci];
-    ci += 1;
-    let audio_chunk = chunks[ci];
-    ci += 1;
-    let boost_chunk = if sound_on {
-        let c = chunks[ci];
-        ci += 1;
-        Some(c)
-    } else {
-        None
-    };
-    let sensitivity_chunk = if sound_on {
-        let c = chunks[ci];
-        ci += 1;
-        Some(c)
-    } else {
-        None
-    };
-    let color_chunk = chunks[ci];
-    ci += 1;
-    let _spacer = chunks[ci];
-    ci += 1;
-    let legend_chunk = chunks[ci];
-
     let status_line = if state.serial_ok {
         format!(
             "OK · {}",
@@ -524,57 +494,74 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
         "serial disconnected".into()
     };
 
-    let mut controls = vec![
-        Line::from(format!("Brightness  {:.2}   ↑↓ adjust", state.brightness)),
+    let mut lines = vec![
+        Line::from(format!("Brightness  {:.2}   w/s adjust", state.brightness)),
         Line::from(format!("FPS        {}", state.fps)),
         Line::from(format!("Active     {}", state.effect)),
     ];
     if sound_on {
-        controls.push(Line::from(Span::styled(
-            "── audio ──────────────────",
-            Style::default().fg(Color::DarkGray),
-        )));
-        controls.push(Line::from(format!(
-            "Sound       {}   m cycle",
+        lines.push(audio_separator_line());
+        lines.push(Line::from(format!(
+            "Sound       {}   Tab cycle",
             state.sound_mode
         )));
-        controls.push(Line::from(format!(
-            "Boost       {:.0}%   - = adjust",
+        lines.push(Line::from(format!(
+            "Boost       {:.0}%   j/k adjust",
             state.reactivity * 100.0
         )));
-        controls.push(Line::from(format!(
-            "Sensitivity {:.0}%   , . adjust",
+        lines.push(Line::from(format!(
+            "Sensitivity {:.0}%   h/l adjust",
             state.sensitivity * 100.0
         )));
     } else {
-        controls.push(Line::from(format!(
-            "Sound      {}   m cycle",
+        lines.push(Line::from(format!(
+            "Sound      {}   Tab cycle",
             state.sound_mode
         )));
     }
-    controls.push(Line::from(format!("Status     {status_line}")));
+    lines.push(Line::from(format!("Status     {status_line}")));
     if let Some(err) = &state.last_error {
-        controls.push(Line::from(format!("Error      {err}")));
+        lines.push(Line::from(format!("Error      {err}")));
     }
     f.render_widget(
-        Paragraph::new(controls).block(Block::default().borders(Borders::ALL).title("controls")),
-        controls_chunk,
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("status")),
+        area,
     );
+}
+
+fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
+    let sound_on = sound_enabled(state);
+    let block = Block::default().borders(Borders::ALL).title("controls");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let constraints = [
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(5),
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+    ];
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
 
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("brightness"))
         .gauge_style(Style::default().fg(Color::Cyan))
         .ratio(state.brightness as f64);
-    f.render_widget(gauge, brightness_chunk);
+    f.render_widget(gauge, chunks[0]);
 
     let speed_enabled = uses_speed(&state.effect);
-    let speed_title = if speed_enabled {
-        "speed · [ ] adjust"
-    } else {
-        "speed (animated modes)"
-    };
     let speed_gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title(speed_title))
+        .block(Block::default().borders(Borders::ALL).title(if speed_enabled {
+            "speed"
+        } else {
+            "speed (animated modes)"
+        }))
         .gauge_style(if speed_enabled {
             Style::default().fg(Color::Yellow)
         } else {
@@ -582,15 +569,18 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .ratio(((state.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)).clamp(0.0, 1.0) as f64)
         .label(format!("{:.1}x", state.speed));
-    f.render_widget(speed_gauge, speed_chunk);
+    f.render_widget(speed_gauge, chunks[1]);
 
-    let audio_title = if sound_on {
-        "audio level"
-    } else {
-        "audio level (sound off)"
-    };
+    draw_color_picker(f, chunks[2], state);
+
+    f.render_widget(Paragraph::new(audio_separator_line()), chunks[3]);
+
     let audio_gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title(audio_title))
+        .block(Block::default().borders(Borders::ALL).title(if sound_on {
+            "audio level"
+        } else {
+            "audio level (sound off)"
+        }))
         .gauge_style(if sound_on {
             Style::default().fg(Color::Magenta)
         } else {
@@ -598,44 +588,48 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .ratio(state.audio_level.clamp(0.0, 1.0) as f64)
         .label(format!("{:.0}%", state.audio_level * 100.0));
-    f.render_widget(audio_gauge, audio_chunk);
+    f.render_widget(audio_gauge, chunks[4]);
 
-    if let Some(boost_chunk) = boost_chunk {
-        let boost_gauge = Gauge::default()
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("audio brightness boost · - = adjust"),
-            )
-            .gauge_style(Style::default().fg(Color::Green))
-            .ratio(state.reactivity.clamp(0.0, 1.0) as f64)
-            .label(format!("{:.0}%", state.reactivity * 100.0));
-        f.render_widget(boost_gauge, boost_chunk);
-    }
+    let boost_gauge = Gauge::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("audio brightness boost"),
+        )
+        .gauge_style(if sound_on {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        })
+        .ratio(state.reactivity.clamp(0.0, 1.0) as f64)
+        .label(format!("{:.0}%", state.reactivity * 100.0));
+    f.render_widget(boost_gauge, chunks[5]);
 
-    if let Some(sensitivity_chunk) = sensitivity_chunk {
-        let sensitivity_gauge = Gauge::default()
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("audio sensitivity · , . adjust"),
-            )
-            .gauge_style(Style::default().fg(Color::LightBlue))
-            .ratio(state.sensitivity.clamp(0.0, 1.0) as f64)
-            .label(format!("{:.0}%", state.sensitivity * 100.0));
-        f.render_widget(sensitivity_gauge, sensitivity_chunk);
-    }
+    let sensitivity_gauge = Gauge::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("audio sensitivity"),
+        )
+        .gauge_style(if sound_on {
+            Style::default().fg(Color::LightBlue)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        })
+        .ratio(state.sensitivity.clamp(0.0, 1.0) as f64)
+        .label(format!("{:.0}%", state.sensitivity * 100.0));
+    f.render_widget(sensitivity_gauge, chunks[6]);
+}
 
-    draw_color_picker(f, color_chunk, state);
-
-    let legend = if sound_on {
-        "↑↓ brightness · ←→ color · [ ] speed · j/k effect · m sound · - = boost · , . sensitivity · p reselect screen"
+fn draw_legend(f: &mut Frame, area: Rect, state: &UiState) {
+    let legend = if sound_enabled(state) {
+        "w/s brightness · a/d speed · ↑↓ effect · ←→ color · Tab sound · j/k boost · h/l sensitivity · R reselect"
     } else {
-        "↑↓ brightness · ←→ color · [ ] speed · j/k effect · m sound · p reselect screen"
+        "w/s brightness · a/d speed · ↑↓ effect · ←→ color · Tab sound · R reselect"
     };
     f.render_widget(
         Paragraph::new(legend).style(Style::default().fg(Color::DarkGray)),
-        legend_chunk,
+        area,
     );
 }
 
