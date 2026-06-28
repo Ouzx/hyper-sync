@@ -62,8 +62,8 @@ One process owns the serial port. TUI and tray are thin IPC clients; legacy subc
 - **Unix socket IPC** — `$XDG_RUNTIME_DIR/hyper-sync.sock`
 - **`hyper-sync ctl`** — status (plain/JSON), stop, restart, quit, reselect screen, patch settings
 - **Serial reconnect** on USB unplug/replug
-- **KDE autostart** desktop entry installed by `./scripts/build.sh`
-- Optional **systemd user unit** (`systemd/hyper-sync.service`)
+- **`hyper-sync install app|service`** — session autostart or systemd user unit
+- **`hyper-sync uninstall app|service`** — remove autostart entry or systemd unit
 
 ### Effect modes
 
@@ -158,7 +158,6 @@ Builds with all features (`screen`, `daemon`, `audio`, `tui`, `tray`) and instal
 
 - `~/.cargo/bin/hyper-sync` and `~/.local/bin/hyper-sync`
 - Tray icon: `~/.local/share/icons/hyper-sync/hyper-hdr.png`
-- KDE autostart: `~/.config/autostart/hyper-sync.desktop`
 
 On Fedora, `scripts/build.sh` sets `BINDGEN_EXTRA_CLANG_ARGS` for system headers.
 
@@ -167,6 +166,24 @@ Minimal build (no screen capture):
 ```bash
 HYPER_SYNC_FEATURES=daemon cargo build --release
 ```
+
+## Install autostart or service
+
+After building, pick one way to start the daemon on login:
+
+```bash
+# KDE/session autostart — desktop entry only (~/.config/autostart/hyper-sync.desktop)
+hyper-sync install app
+hyper-sync uninstall app
+
+# systemd user service — enable, start now, restart on failure
+hyper-sync install service
+hyper-sync uninstall service
+```
+
+**App** writes the embedded desktop entry and nothing else. **Service** installs `~/.config/systemd/user/hyper-sync.service`, runs `daemon-reload`, and `enable --now`. The unit sets NVIDIA offload env vars and runs `hyper-sync daemon`.
+
+You can also run `hyper-sync daemon` manually without either.
 
 ## Quick start
 
@@ -251,6 +268,8 @@ hyper-sync tui
 hyper-sync ctl status [--json]
 hyper-sync ctl stop | restart | quit | reselect-screen
 hyper-sync ctl set --mode screen --brightness 0.2 --fps 30 --speed 1.5 --color ff3300
+hyper-sync install app | service
+hyper-sync uninstall app | service
 ```
 
 ### Direct modes (standalone or IPC patch when daemon runs)
@@ -279,16 +298,6 @@ Skydimo frame (not standard Adalight — **no checksum**):
 ```
 
 Total: **201 bytes** per frame.
-
-## Systemd
-
-```bash
-cp systemd/hyper-sync.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now hyper-sync.service
-```
-
-The unit sets NVIDIA offload env vars and runs `hyper-sync daemon`.
 
 ## Performance notes
 

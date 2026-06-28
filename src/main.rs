@@ -4,6 +4,7 @@ mod config;
 #[cfg(feature = "daemon")]
 mod daemon;
 mod effects;
+mod install;
 mod layout;
 mod protocol;
 mod serial;
@@ -52,6 +53,16 @@ enum Commands {
     /// Quit the running daemon (alias for `ctl quit`)
     #[cfg(feature = "daemon")]
     Quit,
+    /// Install autostart desktop entry or systemd user service
+    Install {
+        #[command(subcommand)]
+        target: install::InstallTarget,
+    },
+    /// Remove autostart desktop entry or systemd user service
+    Uninstall {
+        #[command(subcommand)]
+        target: install::InstallTarget,
+    },
     /// Solid color on all LEDs
     Solid {
         #[arg(long, default_value = config::DEFAULT_PORT)]
@@ -145,6 +156,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Quit => run_ctl(CtlAction::Quit),
         #[cfg(feature = "daemon")]
         Commands::Ctl { action } => run_ctl(action),
+        Commands::Install { target } => install::run_install(target),
+        Commands::Uninstall { target } => install::run_uninstall(target),
         Commands::Solid {
             port,
             leds,

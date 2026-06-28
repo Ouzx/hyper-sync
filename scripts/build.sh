@@ -13,7 +13,3 @@ install -Dm755 target/release/hyper-sync "${HOME}/.local/bin/hyper-sync"
 if [[ -f assets/hyper-hdr.png ]]; then
   install -Dm644 assets/hyper-hdr.png "${HOME}/.local/share/icons/hyper-sync/hyper-hdr.png"
 fi
-
-if [[ -f assets/hyper-sync.desktop ]]; then
-  install -Dm644 assets/hyper-sync.desktop "${HOME}/.config/autostart/hyper-sync.desktop"
-fi
