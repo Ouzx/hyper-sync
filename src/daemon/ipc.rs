@@ -21,6 +21,8 @@ pub enum IpcRequest {
     Stop,
     Restart,
     Quit,
+    /// Clear saved portal token; re-prompt on next screen capture start.
+    ReselectScreen,
     Set { config: RuntimeConfig },
     Patch {
         mode: Option<String>,
@@ -151,6 +153,14 @@ fn handle_client(
                 error: None,
             }
         }
+        IpcRequest::ReselectScreen => {
+            reload_tx.send(ReloadMsg::ReselectScreen)?;
+            IpcResponse {
+                ok: true,
+                status: Some(status.lock().unwrap().clone()),
+                error: None,
+            }
+        }
         IpcRequest::Quit => {
             shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
             IpcResponse {
@@ -197,7 +207,12 @@ fn handle_client(
             }
             let new_mode = config.read().unwrap().effect.mode;
             if mode_change && old_mode != new_mode {
-                save_and_notify(&config, &config_path, &reload_tx, ReloadMsg::Force)?;
+                eprintln!("ipc: mode {} -> {}", old_mode.as_str(), new_mode.as_str());
+                if old_mode.is_screen() && new_mode.is_screen() {
+                    save_config(&config, &config_path)?;
+                } else {
+                    save_and_notify(&config, &config_path, &reload_tx, ReloadMsg::Force)?;
+                }
             } else {
                 save_config(&config, &config_path)?;
             }
@@ -223,7 +238,9 @@ fn handle_client(
 }
 
 fn save_config(config: &Arc<RwLock<RuntimeConfig>>, path: &Path) -> anyhow::Result<()> {
-    config.read().unwrap().save(path)
+    config.read().unwrap().save(path)?;
+    super::bump_config_save_gen();
+    Ok(())
 }
 
 fn save_and_notify(
@@ -233,6 +250,7 @@ fn save_and_notify(
     msg: ReloadMsg,
 ) -> anyhow::Result<()> {
     config.read().unwrap().save(path)?;
+    super::bump_config_save_gen();
     reload_tx.send(msg)?;
     Ok(())
 }

@@ -254,10 +254,8 @@ impl RuntimeConfig {
             EffectMode::Strobe => "strobe".into(),
             EffectMode::Wipe => "wipe".into(),
             #[cfg(feature = "screen")]
-            EffectMode::Screen => format!("screen:{}:{}", self.screen.monitor, self.screen.layout),
-            #[cfg(feature = "screen")]
-            EffectMode::ScreenCenter => {
-                format!("screen_center:{}:{}", self.screen.monitor, self.screen.layout)
+            EffectMode::Screen | EffectMode::ScreenCenter => {
+                format!("screen:{}:{}", self.screen.monitor, self.screen.layout)
             }
             #[cfg(not(feature = "screen"))]
             EffectMode::Screen => "screen".into(),

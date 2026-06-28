@@ -97,12 +97,17 @@ impl UiState {
             self.color_idx = i;
         }
     }
+    fn sync_list_cursor(&mut self) {
+        if let Some(i) = MODES.iter().position(|m| *m == self.effect.as_str()) {
+            self.list_cursor = i;
+        }
+    }
 }
 
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            effect: "screen".into(),
+            effect: "off".into(),
             brightness: 0.8,
             fps: 30,
             speed: 1.0,
@@ -113,7 +118,7 @@ impl Default for UiState {
             serial_ok: true,
             last_error: None,
             color_idx: 0,
-            list_cursor: 1,
+            list_cursor: 0,
             digit_buf: String::new(),
             list_scroll: 0,
         }
@@ -145,11 +150,20 @@ fn tui_loop() -> anyhow::Result<()> {
                     }
                     KeyCode::Char('k') => move_list_cursor(&mut state, -1),
                     KeyCode::Char('j') => move_list_cursor(&mut state, 1),
-                    KeyCode::Enter | KeyCode::Char(' ') => select_effect(&mut state),
                     KeyCode::Char(c) if c.is_ascii_digit() => {
+                        if state.digit_buf.is_empty() {
+                            if let Some(d) = c.to_digit(10) {
+                                let n = d as usize;
+                                if (1..=9).contains(&n) && n <= MODES.len() {
+                                    state.list_cursor = n - 1;
+                                    patch_mode(MODES[n - 1], &mut state).ok();
+                                    continue;
+                                }
+                            }
+                        }
                         state.digit_buf.push(c);
                         if state.digit_buf.len() >= 2 {
-                            select_effect(&mut state);
+                            apply_digit_pick(&mut state);
                         }
                     }
                     KeyCode::Left => cycle_color(&mut state, -1),
@@ -159,6 +173,9 @@ fn tui_loop() -> anyhow::Result<()> {
                     }
                     KeyCode::Char(']') => {
                         adjust_speed(0.1).ok();
+                    }
+                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                        ipc_request(&IpcRequest::ReselectScreen).ok();
                     }
                     KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                         ipc_request(&IpcRequest::Restart).ok();
@@ -182,6 +199,7 @@ fn tui_loop() -> anyhow::Result<()> {
                     state.serial_ok = st.serial_ok;
                     state.last_error = st.last_error;
                     state.sync_color_idx();
+                    state.sync_list_cursor();
                 }
             }
             last_poll = Instant::now();
@@ -195,7 +213,12 @@ fn tui_loop() -> anyhow::Result<()> {
 fn move_list_cursor(state: &mut UiState, dir: i32) {
     state.digit_buf.clear();
     let n = MODES.len() as i32;
-    state.list_cursor = (state.list_cursor as i32 + dir).rem_euclid(n) as usize;
+    let next = (state.list_cursor as i32 + dir).rem_euclid(n) as usize;
+    if next == state.list_cursor {
+        return;
+    }
+    state.list_cursor = next;
+    patch_mode(MODES[next], state).ok();
 }
 
 fn item_height(idx: usize, active_effect: &str) -> u16 {
@@ -230,21 +253,17 @@ fn ensure_list_cursor_visible(state: &mut UiState, visible: u16) {
     }
 }
 
-fn select_effect(state: &mut UiState) {
-    let idx = if !state.digit_buf.is_empty() {
-        state
-            .digit_buf
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .filter(|&i| i < MODES.len())
-            .unwrap_or(state.list_cursor)
-    } else {
-        state.list_cursor
-    };
+fn apply_digit_pick(state: &mut UiState) {
+    let idx = state
+        .digit_buf
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .filter(|&i| i < MODES.len())
+        .unwrap_or(state.list_cursor);
     state.digit_buf.clear();
     state.list_cursor = idx;
-    patch_mode(MODES[idx]).ok();
+    patch_mode(MODES[idx], state).ok();
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {
@@ -264,7 +283,8 @@ fn cycle_color(state: &mut UiState, dir: i32) {
     .ok();
 }
 
-fn patch_mode(mode: &str) -> anyhow::Result<()> {
+fn patch_mode(mode: &str, state: &mut UiState) -> anyhow::Result<()> {
+    state.effect = mode.to_string();
     ipc_request(&IpcRequest::Patch {
         mode: Some(mode.into()),
         brightness: None,
@@ -386,7 +406,7 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
     draw_color_picker(f, chunks[3], state);
 
     f.render_widget(
-        Paragraph::new("↑↓ brightness · ←→ color · [ ] speed · j/k select · #+Enter effect")
+        Paragraph::new("↑↓ brightness · ←→ color · [ ] speed · j/k effect · p reselect screen")
             .style(Style::default().fg(Color::DarkGray)),
         chunks[5],
     );

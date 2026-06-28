@@ -50,7 +50,7 @@ impl Tray for HyperTray {
             .unwrap_or_else(|| "hyper-sync".into());
         ToolTip {
             title: "hyper-sync".into(),
-            description: detail,
+            description: format!("{detail}\nClick: toggle off · Middle-click: reselect screen"),
             ..Default::default()
         }
     }
@@ -59,6 +59,7 @@ impl Tray for HyperTray {
         vec![
             ipc_item("Restart", IpcRequest::Restart),
             ipc_item("Stop", IpcRequest::Stop),
+            ipc_item("Reselect screen capture…", IpcRequest::ReselectScreen),
             MenuItem::SubMenu(SubMenu {
                 label: "Effect".into(),
                 submenu: vec![
@@ -160,6 +161,10 @@ impl Tray for HyperTray {
                 speed: None,
             });
         }
+    }
+
+    fn secondary_activate(&mut self, _x: i32, _y: i32) {
+        ipc_async(IpcRequest::ReselectScreen);
     }
 }
 

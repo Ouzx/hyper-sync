@@ -111,6 +111,8 @@ enum CtlAction {
     Stop,
     Restart,
     Quit,
+    /// Clear saved screen-capture permission (re-prompt next time screen sync starts)
+    ReselectScreen,
     Set {
         #[arg(long)]
         mode: Option<String>,
@@ -297,6 +299,10 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
         }
         CtlAction::Restart => {
             ipc_request(&IpcRequest::Restart)?;
+            Ok(())
+        }
+        CtlAction::ReselectScreen => {
+            ipc_request(&IpcRequest::ReselectScreen)?;
             Ok(())
         }
         CtlAction::Quit => {
