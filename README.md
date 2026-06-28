@@ -1,5 +1,11 @@
 # hyper-sync
 
+
+
+https://github.com/user-attachments/assets/771ed36b-8a4d-41ad-9617-2531088e80cc
+
+
+
 Low-latency LED sync for **Skydimo** strips on Linux/Wayland. A single Rust binary drives 65 RGB LEDs over USB serial, mirrors screen edges via **xdg-desktop-portal + PipeWire**, and optionally reacts to system audio — no Node/Bun runtime, no multi-platform baggage.
 
 Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, TUI, tray, animated effects, and sound-reactive brightness.
