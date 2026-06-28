@@ -71,6 +71,9 @@ struct UiState {
     serial_ok: bool,
     last_error: Option<String>,
     color_idx: usize,
+    list_cursor: usize,
+    digit_buf: String,
+    list_scroll: usize,
 }
 
 impl UiState {
@@ -95,6 +98,9 @@ impl Default for UiState {
             serial_ok: true,
             last_error: None,
             color_idx: 0,
+            list_cursor: MODES.len() - 1,
+            digit_buf: String::new(),
+            list_scroll: 0,
         }
     }
 }
@@ -105,30 +111,30 @@ fn tui_loop() -> anyhow::Result<()> {
     let mut last_poll = Instant::now() - Duration::from_secs(1);
 
     loop {
-        // Input first — don't block on IPC before reading keys.
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
                 match code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        if !state.digit_buf.is_empty() {
+                            state.digit_buf.clear();
+                        } else {
+                            return Ok(());
+                        }
+                    }
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Tab => cycle_mode(&state.effect, 1),
-                    KeyCode::BackTab => cycle_mode(&state.effect, -1),
-                    KeyCode::Char('s') => {
-                        patch_mode("solid").ok();
+                    KeyCode::Up | KeyCode::Char('k') => move_list_cursor(&mut state, -1),
+                    KeyCode::Down | KeyCode::Char('j') => move_list_cursor(&mut state, 1),
+                    KeyCode::Enter | KeyCode::Char(' ') => select_effect(&mut state),
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        state.digit_buf.push(c);
+                        if state.digit_buf.len() >= 2 {
+                            select_effect(&mut state);
+                        }
                     }
-                    KeyCode::Char('c') => {
-                        patch_mode("candle").ok();
-                    }
-                    KeyCode::Char('y') => {
-                        patch_mode("screen").ok();
-                    }
-                    KeyCode::Char('o') => {
-                        patch_mode("off").ok();
-                    }
-                    KeyCode::Up => {
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
                         adjust_brightness(0.05).ok();
                     }
-                    KeyCode::Down => {
+                    KeyCode::Char('-') | KeyCode::Char('_') => {
                         adjust_brightness(-0.05).ok();
                     }
                     KeyCode::Left => cycle_color(&mut state, -1),
@@ -166,16 +172,64 @@ fn tui_loop() -> anyhow::Result<()> {
             last_poll = Instant::now();
         }
 
-        terminal.draw(|f| draw_ui(f, &state))?;
+        terminal.draw(|f| draw_ui(f, &mut state))?;
         thread::sleep(Duration::from_millis(16));
     }
 }
 
-fn cycle_mode(current: &str, dir: i32) {
-    let idx = MODES.iter().position(|m| *m == current).unwrap_or(0);
+fn move_list_cursor(state: &mut UiState, dir: i32) {
+    state.digit_buf.clear();
     let n = MODES.len() as i32;
-    let next = (idx as i32 + dir).rem_euclid(n) as usize;
-    patch_mode(MODES[next]).ok();
+    state.list_cursor = (state.list_cursor as i32 + dir).rem_euclid(n) as usize;
+}
+
+fn item_height(idx: usize, active_effect: &str) -> u16 {
+    if MODES[idx] == active_effect {
+        3
+    } else {
+        1
+    }
+}
+
+fn ensure_list_cursor_visible(state: &mut UiState, visible: u16) {
+    if state.list_cursor < state.list_scroll {
+        state.list_scroll = state.list_cursor;
+    }
+    loop {
+        let mut y = 0u16;
+        let mut idx = state.list_scroll;
+        let mut ok = false;
+        while idx < MODES.len() && y < visible {
+            let h = item_height(idx, &state.effect);
+            if idx == state.list_cursor {
+                ok = y.saturating_add(h) <= visible;
+                break;
+            }
+            y = y.saturating_add(h);
+            idx += 1;
+        }
+        if ok || state.list_scroll >= state.list_cursor {
+            break;
+        }
+        state.list_scroll += 1;
+    }
+}
+
+fn select_effect(state: &mut UiState) {
+    let idx = if !state.digit_buf.is_empty() {
+        state
+            .digit_buf
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .filter(|&i| i < MODES.len())
+            .unwrap_or(state.list_cursor)
+    } else {
+        state.list_cursor
+    };
+    state.digit_buf.clear();
+    state.list_cursor = idx;
+    patch_mode(MODES[idx]).ok();
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {
@@ -241,28 +295,27 @@ fn adjust_speed(delta: f32) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn draw_ui(f: &mut Frame, state: &UiState) {
+fn draw_ui(f: &mut Frame, state: &mut UiState) {
+    let root = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
+        .split(f.area());
+
+    draw_controls(f, root[0], state);
+    draw_effect_list(f, root[1], state);
+}
+
+fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
             Constraint::Length(6),
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Length(5),
+            Constraint::Min(5),
             Constraint::Length(2),
         ])
-        .split(f.area());
-
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled(
-            format!(" {} ", state.effect.to_uppercase()),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  Tab / Shift-Tab cycle effect"),
-    ]))
-    .block(Block::default().borders(Borders::ALL).title("effect"));
-    f.render_widget(title, chunks[0]);
+        .split(area);
 
     let status_line = if state.serial_ok {
         format!(
@@ -278,8 +331,9 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
     };
 
     let mut controls = vec![
-        Line::from(format!("Brightness  {:.2}   ↑↓ adjust", state.brightness)),
+        Line::from(format!("Brightness  {:.2}   +/- adjust", state.brightness)),
         Line::from(format!("FPS        {}", state.fps)),
+        Line::from(format!("Active     {}", state.effect)),
         Line::from(format!("Status     {status_line}")),
     ];
     if let Some(err) = &state.last_error {
@@ -287,14 +341,14 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
     }
     f.render_widget(
         Paragraph::new(controls).block(Block::default().borders(Borders::ALL).title("controls")),
-        chunks[1],
+        chunks[0],
     );
 
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("brightness"))
         .gauge_style(Style::default().fg(Color::Cyan))
         .ratio(state.brightness as f64);
-    f.render_widget(gauge, chunks[2]);
+    f.render_widget(gauge, chunks[1]);
 
     let speed_enabled = uses_speed(&state.effect);
     let speed_title = if speed_enabled {
@@ -311,15 +365,103 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
         })
         .ratio(((state.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)).clamp(0.0, 1.0) as f64)
         .label(format!("{:.1}x", state.speed));
-    f.render_widget(speed_gauge, chunks[3]);
+    f.render_widget(speed_gauge, chunks[2]);
 
-    draw_color_picker(f, chunks[4], state);
+    draw_color_picker(f, chunks[3], state);
 
     f.render_widget(
-        Paragraph::new("q/Ctrl+C quit · Tab mode · ←→ color · [ ] speed · ↑↓ brightness")
+        Paragraph::new("+/- brightness · ←→ color · [ ] speed · j/k select · #+Enter effect")
             .style(Style::default().fg(Color::DarkGray)),
-        chunks[5],
+        chunks[4],
     );
+}
+
+fn draw_effect_list(f: &mut Frame, area: Rect, state: &mut UiState) {
+    let pick_hint = if state.digit_buf.is_empty() {
+        String::new()
+    } else {
+        format!(" → {}", state.digit_buf)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!("effects{pick_hint}"));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    ensure_list_cursor_visible(state, inner.height);
+
+    let mut y = inner.y;
+    let bottom = inner.y.saturating_add(inner.height);
+    let mut idx = state.list_scroll;
+
+    while idx < MODES.len() && y < bottom {
+        let mode = MODES[idx];
+        let is_active = mode == state.effect.as_str();
+        let is_cursor = idx == state.list_cursor;
+        let row_h = item_height(idx, &state.effect);
+        if y.saturating_add(row_h) > bottom {
+            break;
+        }
+
+        let row_area = Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: row_h,
+        };
+
+        let chevron = if is_cursor { "▶" } else { " " };
+        let num = format!("{:2}", idx + 1);
+        let label = mode_label(mode);
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{chevron} {num} "),
+                if is_cursor {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+            Span::styled(
+                label,
+                if is_active {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_cursor {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default()
+                },
+            ),
+        ]);
+
+        if is_active {
+            let bordered = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
+            let inner_row = bordered.inner(row_area);
+            f.render_widget(bordered, row_area);
+            if inner_row.width > 0 && inner_row.height > 0 {
+                f.render_widget(Paragraph::new(line), inner_row);
+            }
+        } else {
+            f.render_widget(Paragraph::new(line), row_area);
+        }
+
+        y = y.saturating_add(row_h);
+        idx += 1;
+    }
+}
+
+fn mode_label(mode: &str) -> String {
+    let mut chars = mode.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    }
 }
 
 fn uses_speed(effect: &str) -> bool {
