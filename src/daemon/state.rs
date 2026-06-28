@@ -26,11 +26,11 @@ pub struct DaemonStatus {
 }
 
 fn default_reactivity() -> f32 {
-    0.6
+    0.3
 }
 
 fn default_sensitivity() -> f32 {
-    0.5
+    0.3
 }
 
 impl DaemonStatus {

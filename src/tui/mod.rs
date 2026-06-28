@@ -41,6 +41,7 @@ const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "rainbow",
 ];
+const FPS_PRESETS: &[u32] = &[24, 30, 45, 60];
 const SPEED_MIN: f32 = 0.1;
 const SPEED_MAX: f32 = 5.0;
 
@@ -100,6 +101,7 @@ struct UiState {
     reactivity: f32,
     sensitivity: f32,
     color_idx: usize,
+    fps_idx: usize,
     list_cursor: usize,
     digit_buf: String,
     list_scroll: usize,
@@ -110,6 +112,18 @@ impl UiState {
         if let Some(i) = COLOR_PRESETS.iter().position(|c| *c == self.color.as_str()) {
             self.color_idx = i;
         }
+    }
+    fn sync_fps_idx(&mut self) {
+        if let Some(i) = FPS_PRESETS.iter().position(|&f| f == self.fps) {
+            self.fps_idx = i;
+            return;
+        }
+        self.fps_idx = FPS_PRESETS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, &f)| f.abs_diff(self.fps))
+            .map(|(i, _)| i)
+            .unwrap_or(1);
     }
     fn sync_list_cursor(&mut self) {
         if let Some(i) = MODES.iter().position(|m| *m == self.effect.as_str()) {
@@ -122,20 +136,21 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             effect: "off".into(),
-            brightness: 0.8,
+            brightness: 0.15,
             fps: 30,
             speed: 1.0,
             detail: String::new(),
-            color: "ff3300".into(),
+            color: "rainbow".into(),
             width: 0,
             height: 0,
             serial_ok: true,
             last_error: None,
             sound_mode: "off".into(),
             audio_level: 0.0,
-            reactivity: 0.6,
-            sensitivity: 0.5,
-            color_idx: 0,
+            reactivity: 0.3,
+            sensitivity: 0.3,
+            color_idx: 7,
+            fps_idx: 1,
             list_cursor: 0,
             digit_buf: String::new(),
             list_scroll: 0,
@@ -209,6 +224,8 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                     KeyCode::Char('l') | KeyCode::Char('L') => {
                         adjust_sensitivity(0.05).ok();
                     }
+                    KeyCode::Char('-') => cycle_fps(&mut state, -1),
+                    KeyCode::Char('=') | KeyCode::Char('+') => cycle_fps(&mut state, 1),
                     KeyCode::Char('R') => {
                         ipc_request(&IpcRequest::ReselectScreen).ok();
                     }
@@ -238,6 +255,7 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                     state.reactivity = st.reactivity;
                     state.sensitivity = st.sensitivity;
                     state.sync_color_idx();
+                    state.sync_fps_idx();
                     state.sync_list_cursor();
                 }
             }
@@ -317,6 +335,23 @@ fn cycle_color(state: &mut UiState, dir: i32) {
         brightness: None,
         color: Some(state.color.clone()),
         fps: None,
+        speed: None,
+        sound_mode: None,
+        reactivity: None,
+        sensitivity: None,
+    })
+    .ok();
+}
+
+fn cycle_fps(state: &mut UiState, dir: i32) {
+    let n = FPS_PRESETS.len() as i32;
+    state.fps_idx = (state.fps_idx as i32 + dir).rem_euclid(n) as usize;
+    state.fps = FPS_PRESETS[state.fps_idx];
+    ipc_request(&IpcRequest::Patch {
+        mode: None,
+        brightness: None,
+        color: None,
+        fps: Some(state.fps),
         speed: None,
         sound_mode: None,
         reactivity: None,
@@ -495,8 +530,12 @@ fn draw_status(f: &mut Frame, area: Rect, state: &UiState) {
     };
 
     let mut lines = vec![
-        Line::from(format!("Brightness  {:.2}   w/s adjust", state.brightness)),
-        Line::from(format!("FPS        {}", state.fps)),
+        Line::from(format!(
+            "Brightness  {:.0}% ({:.2})   w/s adjust",
+            state.brightness * 100.0,
+            state.brightness
+        )),
+        Line::from(format!("FPS        {}   - = pick", state.fps)),
         Line::from(format!("Active     {}", state.effect)),
     ];
     if sound_on {
@@ -539,6 +578,7 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
         Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(5),
+        Constraint::Length(5),
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -571,9 +611,10 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
         .label(format!("{:.1}x", state.speed));
     f.render_widget(speed_gauge, chunks[1]);
 
-    draw_color_picker(f, chunks[2], state);
+    draw_fps_picker(f, chunks[2], state);
+    draw_color_picker(f, chunks[3], state);
 
-    f.render_widget(Paragraph::new(audio_separator_line()), chunks[3]);
+    f.render_widget(Paragraph::new(audio_separator_line()), chunks[4]);
 
     let audio_gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title(if sound_on {
@@ -588,7 +629,7 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .ratio(state.audio_level.clamp(0.0, 1.0) as f64)
         .label(format!("{:.0}%", state.audio_level * 100.0));
-    f.render_widget(audio_gauge, chunks[4]);
+    f.render_widget(audio_gauge, chunks[5]);
 
     let boost_gauge = Gauge::default()
         .block(
@@ -603,7 +644,7 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .ratio(state.reactivity.clamp(0.0, 1.0) as f64)
         .label(format!("{:.0}%", state.reactivity * 100.0));
-    f.render_widget(boost_gauge, chunks[5]);
+    f.render_widget(boost_gauge, chunks[6]);
 
     let sensitivity_gauge = Gauge::default()
         .block(
@@ -618,14 +659,14 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .ratio(state.sensitivity.clamp(0.0, 1.0) as f64)
         .label(format!("{:.0}%", state.sensitivity * 100.0));
-    f.render_widget(sensitivity_gauge, chunks[6]);
+    f.render_widget(sensitivity_gauge, chunks[7]);
 }
 
 fn draw_legend(f: &mut Frame, area: Rect, state: &UiState) {
     let legend = if sound_enabled(state) {
-        "w/s brightness · a/d speed · ↑↓ effect · ←→ color · Tab sound · j/k boost · h/l sensitivity · R reselect"
+        "w/s brightness · a/d speed · - = fps · ↑↓ effect · ←→ color · Tab sound · j/k boost · h/l sensitivity · R reselect"
     } else {
-        "w/s brightness · a/d speed · ↑↓ effect · ←→ color · Tab sound · R reselect"
+        "w/s brightness · a/d speed · - = fps · ↑↓ effect · ←→ color · Tab sound · R reselect"
     };
     f.render_widget(
         Paragraph::new(legend).style(Style::default().fg(Color::DarkGray)),
@@ -784,6 +825,44 @@ fn rainbow_letter_spans(text: &str, selected: bool) -> Vec<Span<'static>> {
             }
         })
         .collect()
+}
+
+fn draw_fps_picker(f: &mut Frame, area: Rect, state: &UiState) {
+    let block = Block::default().borders(Borders::ALL).title("fps");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let preset_line: Vec<Span> = FPS_PRESETS
+        .iter()
+        .enumerate()
+        .flat_map(|(i, &fps)| {
+            let selected = i == state.fps_idx;
+            let label = if selected {
+                format!("[{fps}]")
+            } else {
+                format!(" {fps} ")
+            };
+            vec![
+                Span::styled(
+                    label,
+                    Style::default().add_modifier(if selected {
+                        Modifier::BOLD | Modifier::UNDERLINED
+                    } else {
+                        Modifier::empty()
+                    }),
+                ),
+                Span::raw(" "),
+            ]
+        })
+        .collect();
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(format!("{} fps  (- = pick)", state.fps)),
+            Line::from(preset_line),
+        ]),
+        inner,
+    );
 }
 
 fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {

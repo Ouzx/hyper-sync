@@ -174,11 +174,11 @@ pub struct AudioSection {
 }
 
 fn default_reactivity() -> f32 {
-    0.6
+    0.3
 }
 
 fn default_sensitivity() -> f32 {
-    0.5
+    0.3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,13 +205,13 @@ fn default_leds() -> u8 {
     DEFAULT_LEDS
 }
 fn default_brightness() -> f32 {
-    0.8
+    0.15
 }
 fn default_fps() -> u32 {
     DEFAULT_FPS
 }
 fn default_color() -> String {
-    "ff3300".into()
+    "rainbow".into()
 }
 fn default_warmth() -> f32 {
     0.9
@@ -243,7 +243,11 @@ impl Default for RuntimeConfig {
             candle: CandleSection {
                 warmth: default_warmth(),
             },
-            audio: AudioSection::default(),
+            audio: AudioSection {
+                sound_mode: SoundMode::default(),
+                reactivity: default_reactivity(),
+                sensitivity: default_sensitivity(),
+            },
             #[cfg(feature = "screen")]
             screen: ScreenSection {
                 monitor: 0,

@@ -46,7 +46,19 @@ impl Tray for HyperTray {
         let detail = ipc_request(&IpcRequest::Status)
             .ok()
             .and_then(|r| r.status)
-            .map(|s| format!("{} · {:.0}%", s.effect, s.brightness * 100.0))
+            .map(|s| {
+                if s.sound_mode == "off" {
+                    format!("{} · {:.0}%", s.effect, s.brightness * 100.0)
+                } else {
+                    format!(
+                        "{} · {:.0}% · sound {} · boost {:.0}%",
+                        s.effect,
+                        s.brightness * 100.0,
+                        s.sound_mode,
+                        s.reactivity * 100.0
+                    )
+                }
+            })
             .unwrap_or_else(|| "hyper-sync".into());
         ToolTip {
             title: "hyper-sync".into(),
@@ -100,21 +112,26 @@ impl Tray for HyperTray {
                 ..Default::default()
             }),
             MenuItem::SubMenu(SubMenu {
-                label: "Sound".into(),
+                label: "Brightness".into(),
                 submenu: vec![
-                    sound_mode_item("Off", "off"),
-                    sound_mode_item("Level", "level"),
-                    sound_mode_item("Balance", "balance"),
+                    brightness_item("15%", 0.15),
+                    brightness_item("25%", 0.25),
+                    brightness_item("40%", 0.40),
+                    brightness_item("50%", 0.50),
+                    brightness_item("75%", 0.75),
+                    brightness_item("100%", 1.0),
                 ],
                 ..Default::default()
             }),
             MenuItem::SubMenu(SubMenu {
-                label: "Brightness".into(),
+                label: "Speed".into(),
                 submenu: vec![
-                    brightness_item("25%", 0.25),
-                    brightness_item("50%", 0.5),
-                    brightness_item("75%", 0.75),
-                    brightness_item("100%", 1.0),
+                    speed_item("0.5×", 0.5),
+                    speed_item("0.7×", 0.7),
+                    speed_item("1.0×", 1.0),
+                    speed_item("1.5×", 1.5),
+                    speed_item("2.0×", 2.0),
+                    speed_item("3.0×", 3.0),
                 ],
                 ..Default::default()
             }),
@@ -124,16 +141,54 @@ impl Tray for HyperTray {
                     color_item("Warm orange", "ff3300"),
                     color_item("Red", "ff0000"),
                     color_item("White", "ffffff"),
+                    color_item("Blue", "0099ff"),
+                    color_item("Green", "00ff88"),
+                    color_item("Magenta", "ff00ff"),
+                    color_item("Yellow", "ffff00"),
                     color_item("Rainbow", "rainbow"),
                 ],
                 ..Default::default()
             }),
             MenuItem::SubMenu(SubMenu {
-                label: "Speed".into(),
+                label: "Sound".into(),
                 submenu: vec![
-                    speed_item("Slow", 0.5),
-                    speed_item("Normal", 1.0),
-                    speed_item("Fast", 2.0),
+                    sound_mode_item("Off", "off"),
+                    sound_mode_item("Level", "level"),
+                    sound_mode_item("Balance", "balance"),
+                ],
+                ..Default::default()
+            }),
+            MenuItem::SubMenu(SubMenu {
+                label: "Audio boost".into(),
+                submenu: vec![
+                    reactivity_item("25%", 0.25),
+                    reactivity_item("40%", 0.40),
+                    reactivity_item("50%", 0.50),
+                    reactivity_item("65%", 0.65),
+                    reactivity_item("80%", 0.80),
+                    reactivity_item("100%", 1.0),
+                ],
+                ..Default::default()
+            }),
+            MenuItem::SubMenu(SubMenu {
+                label: "Sensitivity".into(),
+                submenu: vec![
+                    sensitivity_item("25%", 0.25),
+                    sensitivity_item("40%", 0.40),
+                    sensitivity_item("50%", 0.50),
+                    sensitivity_item("65%", 0.65),
+                    sensitivity_item("80%", 0.80),
+                    sensitivity_item("100%", 1.0),
+                ],
+                ..Default::default()
+            }),
+            MenuItem::SubMenu(SubMenu {
+                label: "FPS".into(),
+                submenu: vec![
+                    fps_item("24", 24),
+                    fps_item("30", 30),
+                    fps_item("45", 45),
+                    fps_item("60", 60),
                 ],
                 ..Default::default()
             }),
@@ -264,10 +319,67 @@ fn color_item(label: &str, color: &str) -> MenuItem<HyperTray> {
         label: label.into(),
         activate: Box::new(move |_| {
             ipc_async(IpcRequest::Patch {
-                mode: Some("solid".into()),
+                mode: None,
                 brightness: None,
                 color: Some(color.clone()),
                 fps: None,
+                speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: None,
+            });
+        }),
+        ..Default::default()
+    })
+}
+
+fn reactivity_item(label: &str, value: f32) -> MenuItem<HyperTray> {
+    MenuItem::Standard(StandardItem {
+        label: label.into(),
+        activate: Box::new(move |_| {
+            ipc_async(IpcRequest::Patch {
+                mode: None,
+                brightness: None,
+                color: None,
+                fps: None,
+                speed: None,
+                sound_mode: None,
+                reactivity: Some(value),
+                sensitivity: None,
+            });
+        }),
+        ..Default::default()
+    })
+}
+
+fn sensitivity_item(label: &str, value: f32) -> MenuItem<HyperTray> {
+    MenuItem::Standard(StandardItem {
+        label: label.into(),
+        activate: Box::new(move |_| {
+            ipc_async(IpcRequest::Patch {
+                mode: None,
+                brightness: None,
+                color: None,
+                fps: None,
+                speed: None,
+                sound_mode: None,
+                reactivity: None,
+                sensitivity: Some(value),
+            });
+        }),
+        ..Default::default()
+    })
+}
+
+fn fps_item(label: &str, fps: u32) -> MenuItem<HyperTray> {
+    MenuItem::Standard(StandardItem {
+        label: label.into(),
+        activate: Box::new(move |_| {
+            ipc_async(IpcRequest::Patch {
+                mode: None,
+                brightness: None,
+                color: None,
+                fps: Some(fps),
                 speed: None,
                 sound_mode: None,
                 reactivity: None,
