@@ -577,8 +577,8 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
     let constraints = [
         Constraint::Length(3),
         Constraint::Length(3),
-        Constraint::Length(5),
-        Constraint::Length(5),
+        Constraint::Length(3),
+        Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -856,13 +856,7 @@ fn draw_fps_picker(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .collect();
 
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(format!("{} fps  (- = pick)", state.fps)),
-            Line::from(preset_line),
-        ]),
-        inner,
-    );
+    f.render_widget(Paragraph::new(Line::from(preset_line)), inner);
 }
 
 fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
@@ -928,37 +922,15 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .collect();
 
-    let current_line: Line = if enabled && is_rainbow_color(&state.color) {
-        Line::from(
-            rainbow_letter_spans("rainbow", true)
-                .into_iter()
-                .chain([Span::raw("  (←→ pick)")])
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        Line::from(Span::styled(
-            if enabled {
-                format!("#{}  (←→ pick)", state.color)
-            } else {
-                format!("#{}  (not used in this mode)", state.color)
-            },
-            if enabled {
-                Style::default()
-            } else {
-                dim
-            },
-        ))
-    };
-
     f.render_widget(
-        Paragraph::new(vec![
-            current_line,
-            Line::from(if enabled {
-                preset_line
-            } else {
-                vec![Span::styled("←→ disabled for this mode", dim)]
-            }),
-        ]),
+        Paragraph::new(Line::from(if enabled {
+            preset_line
+        } else {
+            preset_line
+                .into_iter()
+                .map(|s| Span::styled(s.content, dim))
+                .collect()
+        })),
         Rect {
             x: inner.x + 5,
             y: inner.y,
