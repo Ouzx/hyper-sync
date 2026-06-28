@@ -62,9 +62,36 @@ impl Tray for HyperTray {
             MenuItem::SubMenu(SubMenu {
                 label: "Effect".into(),
                 submenu: vec![
-                    patch_item("Off", "off"),
-                    patch_item("Solid", "solid"),
-                    patch_item("Candle", "candle"),
+                    MenuItem::SubMenu(SubMenu {
+                        label: "Static".into(),
+                        submenu: vec![patch_item("Off", "off"), patch_item("Solid", "solid")],
+                        ..Default::default()
+                    }),
+                    MenuItem::SubMenu(SubMenu {
+                        label: "Ambient".into(),
+                        submenu: vec![
+                            patch_item("Candle", "candle"),
+                            patch_item("Pulse", "pulse"),
+                            patch_item("Aurora", "aurora"),
+                            patch_item("Fire", "fire"),
+                            patch_item("Rainbow", "rainbow"),
+                        ],
+                        ..Default::default()
+                    }),
+                    MenuItem::SubMenu(SubMenu {
+                        label: "Motion".into(),
+                        submenu: vec![
+                            patch_item("Chase", "chase"),
+                            patch_item("Wave", "wave"),
+                            patch_item("Scanner", "scanner"),
+                            patch_item("Sparkle", "sparkle"),
+                            patch_item("Heartbeat", "heartbeat"),
+                            patch_item("Segment", "segment"),
+                            patch_item("Strobe", "strobe"),
+                            patch_item("Wipe", "wipe"),
+                        ],
+                        ..Default::default()
+                    }),
                     patch_item("Screen sync", "screen"),
                 ],
                 ..Default::default()
@@ -204,7 +231,7 @@ fn speed_item(label: &str, speed: f32) -> MenuItem<HyperTray> {
         label: label.into(),
         activate: Box::new(move |_| {
             ipc_async(IpcRequest::Patch {
-                mode: Some("candle".into()),
+                mode: None,
                 brightness: None,
                 color: None,
                 fps: None,

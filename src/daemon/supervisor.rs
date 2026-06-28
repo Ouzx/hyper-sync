@@ -71,7 +71,7 @@ impl Supervisor {
             st.effect = cfg.effect.mode.as_str().to_string();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
-            st.speed = cfg.candle.speed;
+            st.speed = cfg.effect.speed;
             st.color = cfg.solid.color.clone();
             st.last_error = None;
         }
@@ -93,6 +93,20 @@ impl Supervisor {
                 }
                 EffectMode::Candle => crate::effects::candle::run_controlled(
                     writer, config, cancel, status, preview,
+                ),
+                EffectMode::Chase
+                | EffectMode::Wave
+                | EffectMode::Rainbow
+                | EffectMode::Scanner
+                | EffectMode::Sparkle
+                | EffectMode::Pulse
+                | EffectMode::Aurora
+                | EffectMode::Fire
+                | EffectMode::Heartbeat
+                | EffectMode::Segment
+                | EffectMode::Strobe
+                | EffectMode::Wipe => crate::effects::animated::run_controlled(
+                    mode, writer, config, cancel, status,
                 ),
                 EffectMode::Screen => {
                     #[cfg(feature = "screen")]

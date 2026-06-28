@@ -43,6 +43,18 @@ pub enum EffectMode {
     Off,
     Solid,
     Candle,
+    Chase,
+    Wave,
+    Rainbow,
+    Scanner,
+    Sparkle,
+    Pulse,
+    Aurora,
+    Fire,
+    Heartbeat,
+    Segment,
+    Strobe,
+    Wipe,
     Screen,
 }
 
@@ -52,12 +64,20 @@ impl EffectMode {
             Self::Off => "off",
             Self::Solid => "solid",
             Self::Candle => "candle",
+            Self::Chase => "chase",
+            Self::Wave => "wave",
+            Self::Rainbow => "rainbow",
+            Self::Scanner => "scanner",
+            Self::Sparkle => "sparkle",
+            Self::Pulse => "pulse",
+            Self::Aurora => "aurora",
+            Self::Fire => "fire",
+            Self::Heartbeat => "heartbeat",
+            Self::Segment => "segment",
+            Self::Strobe => "strobe",
+            Self::Wipe => "wipe",
             Self::Screen => "screen",
         }
-    }
-
-    pub fn needs_restart(self, other: Self) -> bool {
-        self != other
     }
 }
 
@@ -93,6 +113,8 @@ pub struct EffectSection {
     pub brightness: f32,
     #[serde(default = "default_fps")]
     pub fps: u32,
+    #[serde(default = "default_speed")]
+    pub speed: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,8 +127,6 @@ pub struct SolidSection {
 pub struct CandleSection {
     #[serde(default = "default_warmth")]
     pub warmth: f32,
-    #[serde(default = "default_speed")]
-    pub speed: f32,
 }
 
 #[cfg(feature = "screen")]
@@ -157,13 +177,13 @@ impl Default for RuntimeConfig {
                 mode: EffectMode::Screen,
                 brightness: default_brightness(),
                 fps: default_fps(),
+                speed: default_speed(),
             },
             solid: SolidSection {
                 color: default_color(),
             },
             candle: CandleSection {
                 warmth: default_warmth(),
-                speed: default_speed(),
             },
             #[cfg(feature = "screen")]
             screen: ScreenSection {
@@ -214,6 +234,18 @@ impl RuntimeConfig {
             EffectMode::Off => "off".into(),
             EffectMode::Solid => "solid".into(),
             EffectMode::Candle => "candle".into(),
+            EffectMode::Chase => "chase".into(),
+            EffectMode::Wave => "wave".into(),
+            EffectMode::Rainbow => "rainbow".into(),
+            EffectMode::Scanner => "scanner".into(),
+            EffectMode::Sparkle => "sparkle".into(),
+            EffectMode::Pulse => "pulse".into(),
+            EffectMode::Aurora => "aurora".into(),
+            EffectMode::Fire => "fire".into(),
+            EffectMode::Heartbeat => "heartbeat".into(),
+            EffectMode::Segment => "segment".into(),
+            EffectMode::Strobe => "strobe".into(),
+            EffectMode::Wipe => "wipe".into(),
             #[cfg(feature = "screen")]
             EffectMode::Screen => format!("screen:{}:{}", self.screen.monitor, self.screen.layout),
             #[cfg(not(feature = "screen"))]

@@ -66,7 +66,7 @@ pub fn run_controlled(
         let cfg = config.read().unwrap().clone();
         let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
         let warmth = cfg.candle.warmth.clamp(0.0, 1.0);
-        let speed = cfg.candle.speed.max(0.1);
+        let speed = cfg.effect.speed.max(0.1);
         let tint = parse_color(&cfg.solid.color).unwrap_or([255, 51, 0]);
         let warm = scale_rgb(tint, 0.35 + 0.65 * warmth);
         let base = [
@@ -92,7 +92,7 @@ pub fn run_controlled(
             let mut st = status.lock().unwrap();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
-            st.speed = cfg.candle.speed;
+            st.speed = cfg.effect.speed;
             st.serial_ok = true;
             st.detail = "candle".into();
             st.color = cfg.solid.color.clone();

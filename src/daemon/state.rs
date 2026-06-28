@@ -24,7 +24,7 @@ impl DaemonStatus {
             effect: cfg.effect.mode.as_str().to_string(),
             brightness: cfg.effect.brightness,
             fps: cfg.effect.fps,
-            speed: cfg.candle.speed,
+            speed: cfg.effect.speed,
             serial_ok: true,
             detail: String::new(),
             color: cfg.solid.color.clone(),

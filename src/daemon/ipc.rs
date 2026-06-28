@@ -125,7 +125,7 @@ fn handle_client(
                 st.effect = cfg.effect.mode.as_str().to_string();
                 st.brightness = cfg.effect.brightness;
                 st.fps = cfg.effect.fps;
-                st.speed = cfg.candle.speed;
+                st.speed = cfg.effect.speed;
                 st.color = cfg.solid.color.clone();
                 st.clone()
             }),
@@ -192,7 +192,7 @@ fn handle_client(
                     cfg.effect.fps = f.max(1);
                 }
                 if let Some(s) = speed {
-                    cfg.candle.speed = s.clamp(0.1, 5.0);
+                    cfg.effect.speed = s.clamp(0.1, 5.0);
                 }
             }
             let new_mode = config.read().unwrap().effect.mode;
@@ -206,7 +206,7 @@ fn handle_client(
                 let mut st = status.lock().unwrap();
                 st.brightness = cfg.effect.brightness;
                 st.fps = cfg.effect.fps;
-                st.speed = cfg.candle.speed;
+                st.speed = cfg.effect.speed;
                 st.color = cfg.solid.color.clone();
                 st.effect = cfg.effect.mode.as_str().to_string();
             }
@@ -238,11 +238,24 @@ fn save_and_notify(
 }
 
 fn parse_mode(s: &str) -> anyhow::Result<crate::config::EffectMode> {
+    use crate::config::EffectMode;
     Ok(match s {
-        "off" => crate::config::EffectMode::Off,
-        "solid" => crate::config::EffectMode::Solid,
-        "candle" => crate::config::EffectMode::Candle,
-        "screen" => crate::config::EffectMode::Screen,
+        "off" => EffectMode::Off,
+        "solid" => EffectMode::Solid,
+        "candle" => EffectMode::Candle,
+        "chase" => EffectMode::Chase,
+        "wave" => EffectMode::Wave,
+        "rainbow" => EffectMode::Rainbow,
+        "scanner" => EffectMode::Scanner,
+        "sparkle" => EffectMode::Sparkle,
+        "pulse" => EffectMode::Pulse,
+        "aurora" => EffectMode::Aurora,
+        "fire" => EffectMode::Fire,
+        "heartbeat" => EffectMode::Heartbeat,
+        "segment" => EffectMode::Segment,
+        "strobe" => EffectMode::Strobe,
+        "wipe" => EffectMode::Wipe,
+        "screen" => EffectMode::Screen,
         other => anyhow::bail!("unknown mode {other}"),
     })
 }

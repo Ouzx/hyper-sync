@@ -16,7 +16,10 @@ use ratatui::Frame;
 use crate::daemon::{daemon_running, ipc_request, IpcRequest};
 use crate::effects::solid::parse_color;
 
-const MODES: &[&str] = &["off", "solid", "candle", "screen"];
+const MODES: &[&str] = &[
+    "off", "solid", "candle", "chase", "wave", "rainbow", "scanner", "sparkle", "pulse",
+    "aurora", "fire", "heartbeat", "segment", "strobe", "wipe", "screen",
+];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "000000",
 ];
@@ -176,7 +179,7 @@ fn cycle_mode(current: &str, dir: i32) {
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {
-    if state.effect == "screen" {
+    if !uses_accent_color(&state.effect) {
         return;
     }
     let n = COLOR_PRESETS.len() as i32;
@@ -224,7 +227,7 @@ fn adjust_speed(delta: f32) -> anyhow::Result<()> {
     let Some(st) = resp.status else {
         return Ok(());
     };
-    if st.effect != "candle" {
+    if !uses_speed(&st.effect) {
         return Ok(());
     }
     let speed = (st.speed + delta).clamp(SPEED_MIN, SPEED_MAX);
@@ -252,17 +255,13 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
         .split(f.area());
 
     let title = Paragraph::new(Line::from(vec![
-        Span::styled(" hyper-sync ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        effect_tab("Off", &state.effect, "off"),
-        Span::raw("  "),
-        effect_tab("Solid", &state.effect, "solid"),
-        Span::raw("  "),
-        effect_tab("Candle", &state.effect, "candle"),
-        Span::raw("  "),
-        effect_tab("Screen", &state.effect, "screen"),
+        Span::styled(
+            format!(" {} ", state.effect.to_uppercase()),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  Tab / Shift-Tab cycle effect"),
     ]))
-    .block(Block::default().borders(Borders::ALL).title("effect · Tab cycle"));
+    .block(Block::default().borders(Borders::ALL).title("effect"));
     f.render_widget(title, chunks[0]);
 
     let status_line = if state.serial_ok {
@@ -297,11 +296,11 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
         .ratio(state.brightness as f64);
     f.render_widget(gauge, chunks[2]);
 
-    let speed_enabled = state.effect == "candle";
+    let speed_enabled = uses_speed(&state.effect);
     let speed_title = if speed_enabled {
         "speed · [ ] adjust"
     } else {
-        "speed (candle only)"
+        "speed (animated modes)"
     };
     let speed_gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title(speed_title))
@@ -323,16 +322,26 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
     );
 }
 
+fn uses_speed(effect: &str) -> bool {
+    effect != "off" && effect != "solid" && effect != "screen"
+}
+
+fn uses_accent_color(effect: &str) -> bool {
+    effect != "off" && effect != "screen" && effect != "rainbow"
+}
+
 fn color_picker_enabled(effect: &str) -> bool {
-    effect == "solid" || effect == "candle"
+    uses_accent_color(effect)
 }
 
 fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
     let enabled = color_picker_enabled(&state.effect);
     let title = if enabled {
         "color"
+    } else if state.effect == "rainbow" {
+        "color (auto hue in rainbow)"
     } else {
-        "color (solid/candle only)"
+        "color (not used in this mode)"
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
@@ -381,9 +390,11 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
         Paragraph::new(vec![
             Line::from(Span::styled(
                 if enabled {
-                    format!("#{}  (solid color · ←→ pick)", state.color)
+                    format!("#{}  (←→ pick)", state.color)
+                } else if state.effect == "rainbow" {
+                    format!("#{}  (rainbow ignores color)", state.color)
                 } else {
-                    format!("#{}  (not used in screen mode)", state.color)
+                    format!("#{}  (not used in this mode)", state.color)
                 },
                 if enabled {
                     Style::default()
@@ -394,7 +405,7 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
             Line::from(if enabled {
                 preset_line
             } else {
-                vec![Span::styled("←→ disabled in screen mode", dim)]
+                vec![Span::styled("←→ disabled for this mode", dim)]
             }),
         ]),
         Rect {
@@ -404,15 +415,4 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
             height: inner.height,
         },
     );
-}
-
-fn effect_tab(label: &str, current: &str, mode: &str) -> Span<'static> {
-    if current == mode {
-        Span::styled(
-            format!("[{label}]"),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::raw(format!(" {label} "))
-    }
 }
