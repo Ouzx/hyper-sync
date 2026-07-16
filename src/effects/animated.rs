@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{EffectMode, RuntimeConfig};
-use crate::daemon::DaemonStatus;
+use crate::daemon::{DaemonStatus, FpsMeter};
 use crate::effects::solid::{resolve_pixel_color, scale_rgb};
 use crate::layout::segment_bounds;
 use crate::protocol::build_frame;
@@ -24,6 +24,7 @@ pub fn run_controlled(
 ) -> anyhow::Result<()> {
     let n = config.read().unwrap().device.leds as usize;
     let mut fire_flicker = vec![1.0f32; n];
+    let mut fps_meter = FpsMeter::new();
     let start = Instant::now();
 
     while !cancel.load(Ordering::Relaxed) {
@@ -48,10 +49,12 @@ pub fn run_controlled(
         maybe_modulate(&mut rgb, n, &cfg, &audio);
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
+        let actual = fps_meter.tick();
         {
             let mut st = status.lock().unwrap();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
+            st.actual_fps = actual;
             st.speed = cfg.effect.speed;
             st.serial_ok = true;
             st.detail = mode.as_str().into();

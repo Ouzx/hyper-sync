@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::audio::AudioSnapshot;
 use crate::config::{EffectMode, RuntimeConfig};
-use crate::daemon::DaemonStatus;
+use crate::daemon::{DaemonStatus, FpsMeter};
 use crate::effects::solid::resolve_pixel_color;
 use crate::layout::segment_bounds;
 use crate::protocol::build_frame;
@@ -20,6 +20,7 @@ pub fn run_controlled(
 ) -> anyhow::Result<()> {
     let n = config.read().unwrap().device.leds as usize;
     let mut display = vec![0.0f32; crate::audio::SPECTRUM_BANDS];
+    let mut fps_meter = FpsMeter::new();
 
     while !cancel.load(Ordering::Relaxed) {
         let cfg = config.read().unwrap().clone();
@@ -65,10 +66,12 @@ pub fn run_controlled(
 
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
+        let actual = fps_meter.tick();
         {
             let mut st = status.lock().unwrap();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
+            st.actual_fps = actual;
             st.serial_ok = true;
             st.detail = "sound_viz".into();
             st.color = cfg.solid.color.clone();

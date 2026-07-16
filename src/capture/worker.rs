@@ -18,7 +18,7 @@ use crate::capture::sample;
 use crate::capture::screen::{open_portal_session, wait_for_graphical_session, wait_for_registry_target, PortalGuard};
 use crate::capture::negotiate;
 use crate::config::{self, EffectMode, LayoutConfig, RuntimeConfig};
-use crate::daemon::DaemonStatus;
+use crate::daemon::{DaemonStatus, FpsMeter};
 use crate::effects::solid::scale_rgb_buf;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
@@ -301,6 +301,7 @@ fn clear_screen_status(status: &Arc<Mutex<DaemonStatus>>) {
     st.width = 0;
     st.height = 0;
     st.detail.clear();
+    st.actual_fps = 0.0;
 }
 
 // ponytail: KDE portal needs ~1s between session.close and Screencast::new
@@ -332,6 +333,7 @@ struct CtrlFrameState {
     height: Arc<AtomicU32>,
     last_frame: std::cell::RefCell<Instant>,
     got_frame: std::cell::RefCell<bool>,
+    fps_meter: std::cell::RefCell<FpsMeter>,
     status: Arc<Mutex<DaemonStatus>>,
     cancel: Arc<AtomicBool>,
     mainloop_ptr: *mut pw::sys::pw_main_loop,
@@ -458,6 +460,7 @@ fn run_capture(
         height: height.clone(),
         last_frame: std::cell::RefCell::new(Instant::now() - min_interval),
         got_frame: std::cell::RefCell::new(false),
+        fps_meter: std::cell::RefCell::new(FpsMeter::new()),
         status: Arc::clone(&status),
         cancel: Arc::clone(&cancel),
         mainloop_ptr,
@@ -569,9 +572,11 @@ fn run_capture(
                             eprintln!("first frame sent to LEDs");
                             *state.got_frame.borrow_mut() = true;
                         }
+                        let actual = state.fps_meter.borrow_mut().tick();
                         let mut st = state.status.lock().unwrap();
                         st.brightness = state.config.read().unwrap().effect.brightness;
                         st.fps = state.config.read().unwrap().effect.fps;
+                        st.actual_fps = actual;
                         st.width = width;
                         st.height = height;
                         st.serial_ok = true;

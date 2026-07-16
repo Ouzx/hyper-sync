@@ -89,6 +89,7 @@ struct UiState {
     effect: String,
     brightness: f32,
     fps: u32,
+    actual_fps: f32,
     speed: f32,
     detail: String,
     color: String,
@@ -138,6 +139,7 @@ impl Default for UiState {
             effect: "off".into(),
             brightness: 0.15,
             fps: 30,
+            actual_fps: 0.0,
             speed: 1.0,
             detail: String::new(),
             color: "rainbow".into(),
@@ -243,6 +245,7 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                     state.effect = st.effect;
                     state.brightness = st.brightness;
                     state.fps = st.fps;
+                    state.actual_fps = st.actual_fps;
                     state.speed = st.speed;
                     state.detail = st.detail;
                     state.color = st.color;
@@ -535,7 +538,10 @@ fn draw_status(f: &mut Frame, area: Rect, state: &UiState) {
             state.brightness * 100.0,
             state.brightness
         )),
-        Line::from(format!("FPS        {}   - = pick", state.fps)),
+        Line::from(format!(
+            "FPS        {} target · {:.0} actual   - = pick",
+            state.fps, state.actual_fps
+        )),
         Line::from(format!("Active     {}", state.effect)),
     ];
     if sound_on {

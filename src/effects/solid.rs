@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::config::{EffectMode, RuntimeConfig};
-use crate::daemon::DaemonStatus;
+use crate::daemon::{DaemonStatus, FpsMeter};
 use crate::config::DeviceConfig;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
@@ -118,6 +118,7 @@ pub fn run_controlled(
     _preview: Arc<Mutex<Vec<u8>>>,
     #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
+    let mut fps_meter = FpsMeter::new();
     while !cancel.load(Ordering::Relaxed)
         && config.read().unwrap().effect.mode == EffectMode::Solid
     {
@@ -140,10 +141,12 @@ pub fn run_controlled(
         maybe_modulate(&mut rgb, n, &cfg, &audio);
         let frame = build_frame(cfg.device.leds, &rgb)?;
         writer.lock().unwrap().write_frame(&frame)?;
+        let actual = fps_meter.tick();
         {
             let mut st = status.lock().unwrap();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
+            st.actual_fps = actual;
             st.serial_ok = true;
             st.detail = if is_rainbow_color(&cfg.solid.color) {
                 "rainbow".into()

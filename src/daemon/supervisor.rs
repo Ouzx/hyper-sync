@@ -158,6 +158,7 @@ impl Supervisor {
             st.effect = cfg.effect.mode.as_str().to_string();
             st.brightness = cfg.effect.brightness;
             st.fps = cfg.effect.fps;
+            st.actual_fps = 0.0;
             st.speed = cfg.effect.speed;
             st.color = cfg.solid.color.clone();
             st.sound_mode = cfg.audio.sound_mode.as_str().to_string();

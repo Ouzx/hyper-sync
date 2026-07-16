@@ -309,8 +309,8 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else if let Some(st) = resp.status {
                 println!(
-                    "effect={} brightness={:.2} fps={} serial_ok={} detail={}",
-                    st.effect, st.brightness, st.fps, st.serial_ok, st.detail
+                    "effect={} brightness={:.2} fps={} actual_fps={:.1} serial_ok={} detail={}",
+                    st.effect, st.brightness, st.fps, st.actual_fps, st.serial_ok, st.detail
                 );
                 if let Some(err) = st.last_error {
                     println!("last_error={err}");

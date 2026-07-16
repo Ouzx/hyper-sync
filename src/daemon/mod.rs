@@ -3,7 +3,7 @@ mod state;
 mod supervisor;
 
 pub use ipc::{cleanup_stale_socket, daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse};
-pub use state::DaemonStatus;
+pub use state::{DaemonStatus, FpsMeter};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
