@@ -16,4 +16,4 @@ warmth = 0.9
 
 [screen]
 monitor = 0
-layout = "config/layout.toml"
+layout = "layout.toml"

@@ -11,6 +11,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{runtime_config_path, EffectMode, RuntimeConfig, SoundMode};
+#[cfg(feature = "screen")]
+use crate::config::ensure_layout_file;
 use super::ReloadMsg;
 use crate::daemon::state::DaemonStatus;
 use crate::config::ipc_socket_path;
@@ -330,5 +332,7 @@ pub fn write_default_config_if_missing() -> anyhow::Result<PathBuf> {
     if !path.exists() {
         RuntimeConfig::default().save(&path)?;
     }
+    #[cfg(feature = "screen")]
+    ensure_layout_file()?;
     Ok(path)
 }

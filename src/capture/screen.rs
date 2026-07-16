@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -340,9 +341,75 @@ pub fn run(
     Ok(())
 }
 
+/// Wait for Wayland + session D-Bus before opening the portal (autostart often runs too early).
+pub(crate) fn wait_for_graphical_session(max: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < max {
+        if std::env::var("WAYLAND_DISPLAY").is_ok()
+            && std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok()
+        {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    eprintln!(
+        "portal: graphical session not ready after {:?} (WAYLAND_DISPLAY / DBUS)",
+        max
+    );
+    false
+}
+
 pub(crate) async fn open_portal_session(
     monitor: u32,
     forget_portal: bool,
+    cancel: Option<Arc<AtomicBool>>,
+) -> anyhow::Result<(
+    ashpd::desktop::screencast::Stream,
+    std::os::fd::OwnedFd,
+    Session<'static, Screencast<'static>>,
+    Screencast<'static>,
+)> {
+    if forget_portal {
+        config::clear_portal_token()?;
+        eprintln!("portal: cleared saved permission");
+    }
+
+    let saved_token = if forget_portal {
+        None
+    } else {
+        config::load_portal_token()
+    };
+    let persist = if forget_portal {
+        PersistMode::DoNot
+    } else {
+        PersistMode::ExplicitlyRevoked
+    };
+
+    if saved_token.is_some() {
+        eprintln!("portal: restoring screencast session…");
+    } else {
+        eprintln!("portal: requesting screen capture permission…");
+    }
+
+    match open_portal_session_inner(monitor, saved_token.clone(), persist, cancel.clone()).await {
+        Ok(session) => Ok(session),
+        Err(e) if saved_token.is_some() && !forget_portal => {
+            eprintln!("portal: restore failed ({e:#}), clearing token and re-prompting…");
+            config::clear_portal_token()?;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+                anyhow::bail!("portal open cancelled");
+            }
+            open_portal_session_inner(monitor, None, PersistMode::DoNot, cancel).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+async fn open_portal_session_inner(
+    monitor: u32,
+    saved_token: Option<String>,
+    persist: PersistMode,
     cancel: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<(
     ashpd::desktop::screencast::Stream,
@@ -358,20 +425,6 @@ pub(crate) async fn open_portal_session(
                 anyhow::bail!("portal open cancelled");
             }
         };
-    }
-
-    bail_if_cancelled!();
-
-    if forget_portal {
-        config::clear_portal_token()?;
-        eprintln!("portal: cleared saved permission");
-    }
-
-    let saved_token = config::load_portal_token();
-    if saved_token.is_some() {
-        eprintln!("portal: restoring screencast session…");
-    } else {
-        eprintln!("portal: requesting screen capture permission…");
     }
 
     bail_if_cancelled!();
@@ -409,7 +462,7 @@ pub(crate) async fn open_portal_session(
                     SourceType::Monitor.into(),
                     false,
                     saved_token_ref,
-                    PersistMode::ExplicitlyRevoked,
+                    persist,
                 )
                 .await?
                 .response()

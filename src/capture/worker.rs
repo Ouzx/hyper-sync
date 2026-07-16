@@ -15,7 +15,7 @@ use pw::spa::param::video::VideoInfoRaw;
 use pw::spa::param::ParamType;
 
 use crate::capture::sample;
-use crate::capture::screen::{open_portal_session, wait_for_registry_target, PortalGuard};
+use crate::capture::screen::{open_portal_session, wait_for_graphical_session, wait_for_registry_target, PortalGuard};
 use crate::capture::negotiate;
 use crate::config::{self, EffectMode, LayoutConfig, RuntimeConfig};
 use crate::daemon::DaemonStatus;
@@ -240,6 +240,8 @@ fn worker_loop(
                 clear_screen_status(&status);
                 *state.lock().unwrap() = WorkerState::Idle;
                 eprintln!("screen worker: reselect");
+                wait_portal_settle(&last_portal_close);
+                thread::sleep(PORTAL_RESELECT_SETTLE);
 
                 if !config.read().unwrap().effect.mode.is_screen() {
                     continue;
@@ -303,6 +305,7 @@ fn clear_screen_status(status: &Arc<Mutex<DaemonStatus>>) {
 
 // ponytail: KDE portal needs ~1s between session.close and Screencast::new
 const PORTAL_SETTLE: Duration = Duration::from_millis(1000);
+const PORTAL_RESELECT_SETTLE: Duration = Duration::from_millis(2000);
 
 fn wait_portal_settle(last_close: &Cell<Option<Instant>>) {
     let Some(t) = last_close.get() else {
@@ -380,6 +383,10 @@ fn run_capture(
     };
 
     wait_portal_settle(last_portal_close);
+
+    if !wait_for_graphical_session(Duration::from_secs(60)) {
+        anyhow::bail!("graphical session not ready (WAYLAND_DISPLAY / DBUS)");
+    }
 
     if cancel.load(Ordering::Relaxed) {
         eprintln!("screen worker: capture aborted (cancelled before portal)");

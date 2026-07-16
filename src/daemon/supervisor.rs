@@ -97,10 +97,16 @@ impl Supervisor {
     pub fn reselect_screen(&mut self) {
         #[cfg(feature = "screen")]
         {
+            self.screen_retry_count = 0;
+            self.last_screen_retry = None;
             let _ = config::clear_portal_token();
-            if self.config.read().unwrap().effect.mode.is_screen() {
-                self.screen.reselect();
+            if !self.config.read().unwrap().effect.mode.is_screen() {
+                return;
             }
+            if self.screen.is_running() {
+                self.screen.release();
+            }
+            self.screen.reselect();
         }
     }
 

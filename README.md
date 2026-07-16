@@ -1,11 +1,5 @@
 # hyper-sync
 
-
-
-https://github.com/user-attachments/assets/771ed36b-8a4d-41ad-9617-2531088e80cc
-
-
-
 Low-latency LED sync for **Skydimo** strips on Linux/Wayland. A single Rust binary drives 65 RGB LEDs over USB serial, mirrors screen edges via **xdg-desktop-portal + PipeWire**, and optionally reacts to system audio — no Node/Bun runtime, no multi-platform baggage.
 
 Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, TUI, tray, animated effects, and sound-reactive brightness.
@@ -187,7 +181,9 @@ hyper-sync install service
 hyper-sync uninstall service
 ```
 
-**App** writes the embedded desktop entry and nothing else. **Service** installs `~/.config/systemd/user/hyper-sync.service`, runs `daemon-reload`, and `enable --now`. The unit sets NVIDIA offload env vars and runs `hyper-sync daemon`.
+**App** writes the embedded desktop entry (3 s startup delay so Wayland/portal are ready) and nothing else. **Service** installs `~/.config/systemd/user/hyper-sync.service`, runs `daemon-reload`, and `enable --now`. The unit sets NVIDIA offload env vars and runs `hyper-sync daemon`.
+
+Re-run `hyper-sync install app` after upgrading to refresh the autostart entry.
 
 You can also run `hyper-sync daemon` manually without either.
 
@@ -290,7 +286,7 @@ hyper-sync off    --port /dev/ttyUSB0 --leds 65
 
 ### Screen capture permission
 
-First run opens the portal picker — allow persistence when prompted. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
+First run opens the portal picker — allow persistence when prompted. Press **`R`** in the TUI (or tray **Reselect screen capture**) to clear the saved token and open the picker again. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
 
 ## Protocol
 

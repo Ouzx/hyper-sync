@@ -220,8 +220,11 @@ fn default_speed() -> f32 {
     1.0
 }
 #[cfg(feature = "screen")]
+const DEFAULT_LAYOUT_TOML: &str = include_str!("../config/layout.toml");
+
+#[cfg(feature = "screen")]
 fn default_layout() -> String {
-    "config/layout.toml".into()
+    "layout.toml".into()
 }
 
 impl Default for RuntimeConfig {
@@ -278,10 +281,14 @@ impl RuntimeConfig {
     pub fn load_or_create_default() -> anyhow::Result<(Self, PathBuf)> {
         let path = runtime_config_path();
         if path.exists() {
+            #[cfg(feature = "screen")]
+            ensure_layout_file()?;
             return Ok((Self::load(&path)?, path));
         }
         let cfg = Self::default();
         cfg.save(&path)?;
+        #[cfg(feature = "screen")]
+        ensure_layout_file()?;
         Ok((cfg, path))
     }
 
@@ -372,6 +379,19 @@ fn default_direction() -> String {
 }
 
 #[cfg(feature = "screen")]
+pub fn ensure_layout_file() -> anyhow::Result<PathBuf> {
+    let path = config_dir().join("layout.toml");
+    if !path.exists() {
+        std::fs::create_dir_all(config_dir())
+            .with_context(|| format!("create {}", config_dir().display()))?;
+        std::fs::write(&path, DEFAULT_LAYOUT_TOML)
+            .with_context(|| format!("write {}", path.display()))?;
+        eprintln!("installed default layout {}", path.display());
+    }
+    Ok(path)
+}
+
+#[cfg(feature = "screen")]
 pub fn resolve_layout_path(path: &Path) -> PathBuf {
     if path.is_absolute() && path.exists() {
         return path.to_path_buf();
@@ -385,21 +405,28 @@ pub fn resolve_layout_path(path: &Path) -> PathBuf {
             return from_cwd;
         }
     }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/layout.toml");
+    if manifest.exists() {
+        return manifest;
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let from_exe = dir.join(path);
             if from_exe.exists() {
                 return from_exe;
             }
-            let from_project = dir.join("config/layout.toml");
-            if from_project.exists() {
-                return from_project;
-            }
         }
     }
-    let from_config = config_dir().join("layout.toml");
-    if from_config.exists() {
-        return from_config;
+    let in_config = config_dir().join(path.file_name().unwrap_or_else(|| path.as_os_str()));
+    if in_config.exists() {
+        return in_config;
+    }
+    let bundled = config_dir().join("layout.toml");
+    if bundled.exists() {
+        return bundled;
+    }
+    if let Ok(p) = ensure_layout_file() {
+        return p;
     }
     path.to_path_buf()
 }
