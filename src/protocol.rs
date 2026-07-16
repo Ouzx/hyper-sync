@@ -41,6 +41,6 @@ mod tests {
         assert_eq!(layout.led_count, 65);
         assert_eq!(layout.origin, "bottom_right");
         assert_eq!(layout.segments.len(), 3);
-        assert_eq!(layout.sample_points().len(), 65);
+        assert_eq!(layout.edge_zones().len(), 65);
     }
 }

@@ -70,10 +70,6 @@ impl FpsMeter {
         }
         self.rate
     }
-
-    pub fn rate(&self) -> f32 {
-        self.rate
-    }
 }
 
 impl DaemonStatus {

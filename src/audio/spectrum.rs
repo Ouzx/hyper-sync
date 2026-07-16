@@ -2,8 +2,6 @@ use std::f32::consts::TAU;
 
 use crate::audio::state::SPECTRUM_BANDS;
 
-const SAMPLE_RATE: f32 = 48_000.0;
-
 pub fn band_frequencies() -> [f32; SPECTRUM_BANDS] {
     let min_f = 60.0f32;
     let max_f = 16_000.0f32;
@@ -32,11 +30,10 @@ pub fn analyze_mono(samples: &[f32], sample_rate: f32) -> [f32; SPECTRUM_BANDS] 
 fn goertzel_mag(samples: &[f32], sample_rate: f32, freq: f32) -> f32 {
     let omega = TAU * freq / sample_rate;
     let coeff = 2.0 * omega.cos();
-    let mut s0 = 0.0f32;
     let mut s1 = 0.0f32;
     let mut s2 = 0.0f32;
     for &x in samples {
-        s0 = x + coeff * s1 - s2;
+        let s0 = x + coeff * s1 - s2;
         s2 = s1;
         s1 = s0;
     }
@@ -44,5 +41,3 @@ fn goertzel_mag(samples: &[f32], sample_rate: f32, freq: f32) -> f32 {
     let imag = s2 * omega.sin();
     (real * real + imag * imag).sqrt() / samples.len() as f32
 }
-
-pub const DEFAULT_SAMPLE_RATE: f32 = SAMPLE_RATE;

@@ -89,10 +89,6 @@ impl EffectMode {
     pub fn is_screen(self) -> bool {
         matches!(self, Self::Screen | Self::ScreenCenter)
     }
-
-    pub fn needs_audio(self) -> bool {
-        matches!(self, Self::SoundViz)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -509,29 +505,6 @@ impl LayoutConfig {
 
         zones.truncate(usize::from(self.led_count));
         zones
-    }
-
-    /// Normalized (x, y) sample points per LED index, origin bottom-right CCW.
-    pub fn sample_points(&self) -> Vec<(f32, f32)> {
-        let mut points = Vec::with_capacity(usize::from(self.led_count));
-        let mut idx = 0u8;
-
-        for seg in &self.segments {
-            let n = usize::from(seg.count);
-            for i in 0..n {
-                let t = if n <= 1 {
-                    0.5
-                } else {
-                    i as f32 / (n as f32 - 1.0)
-                };
-                points.push(edge_point(&seg.edge, t));
-                idx += 1;
-                let _ = idx;
-            }
-        }
-
-        points.truncate(usize::from(self.led_count));
-        points
     }
 }
 
