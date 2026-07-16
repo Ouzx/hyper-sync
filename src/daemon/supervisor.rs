@@ -261,8 +261,9 @@ impl Supervisor {
 
             let cfg = self.config.read().unwrap();
             if self.screen_error_needs_retry(&cfg) {
-                const MAX_RETRIES: u32 = 3;
-                const RETRY_BACKOFF: Duration = Duration::from_secs(10);
+                // PipeWire restarts can take a while — keep trying for ~1 min.
+                const MAX_RETRIES: u32 = 12;
+                const RETRY_BACKOFF: Duration = Duration::from_secs(5);
                 if self.screen_retry_count >= MAX_RETRIES {
                     return;
                 }

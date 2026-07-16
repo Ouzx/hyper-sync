@@ -1,4 +1,5 @@
 mod ipc;
+mod lock;
 mod state;
 mod supervisor;
 
@@ -39,9 +40,23 @@ pub(crate) enum ReloadMsg {
 pub fn run(with_tray: bool) -> anyhow::Result<()> {
     eprintln!("hyper-sync daemon starting…");
 
+    // Flock first — beats the IPC race when launching twice from the KDE menu.
+    let Some(_lock) = lock::try_acquire()? else {
+        if daemon_running() {
+            eprintln!("hyper-sync daemon already running");
+            // Soft exit so desktop launches don't pop an error dialog.
+            return Ok(());
+        }
+        anyhow::bail!(
+            "hyper-sync daemon lock is held but IPC is not responding \
+             (zombie?). Kill the old process, then retry."
+        );
+    };
+
     cleanup_stale_socket();
     if daemon_running() {
-        anyhow::bail!("hyper-sync daemon already running (use `hyper-sync ctl quit` first)");
+        eprintln!("hyper-sync daemon already running");
+        return Ok(());
     }
 
     let (config, config_path) = RuntimeConfig::load_or_create_default()?;

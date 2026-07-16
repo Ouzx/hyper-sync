@@ -101,8 +101,13 @@ impl ScreenWorker {
         }
         self.cancel.store(true, Ordering::SeqCst);
         let _ = self.cmd_tx.send(ScreenCmd::Release);
-        while self.running.load(Ordering::Relaxed) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.running.load(Ordering::Relaxed) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
+        }
+        if self.running.load(Ordering::Relaxed) {
+            eprintln!("screen worker: release timed out — forcing idle");
+            self.running.store(false, Ordering::SeqCst);
         }
     }
 
@@ -115,7 +120,15 @@ impl ScreenWorker {
         self.cancel.store(true, Ordering::SeqCst);
         let _ = self.cmd_tx.send(ScreenCmd::Shutdown);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !h.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            if h.is_finished() {
+                let _ = h.join();
+            } else {
+                eprintln!("screen worker: shutdown join timed out");
+            }
         }
     }
 
@@ -128,8 +141,13 @@ impl ScreenWorker {
     }
 
     pub fn wait_idle(&self) {
-        while self.running.load(Ordering::Relaxed) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.running.load(Ordering::Relaxed) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
+        }
+        if self.running.load(Ordering::Relaxed) {
+            eprintln!("screen worker: wait_idle timed out — forcing idle");
+            self.running.store(false, Ordering::SeqCst);
         }
     }
 }
@@ -480,9 +498,11 @@ fn run_capture(
     let frame_state_capture = Rc::clone(&frame_state);
     let _listener = stream
         .add_local_listener_with_user_data(frame_state)
-        .state_changed(|_stream, _state, old, new| {
+        .state_changed(|_stream, state, old, new| {
             if let pw::stream::StreamState::Error(msg) = new {
                 eprintln!("pipewire stream: {old:?} -> Error({msg:?})");
+                *state.quit_reason.borrow_mut() = "pipewire error";
+                unsafe { pw::sys::pw_main_loop_quit(state.mainloop_ptr) };
             } else if old != new {
                 eprintln!("pipewire stream: {old:?} -> {new:?}");
             }
@@ -619,6 +639,9 @@ fn run_capture(
         eprintln!("screen worker: capture ended (cancel)");
     } else {
         eprintln!("screen worker: capture ended ({reason})");
+    }
+    if reason == "pipewire error" {
+        anyhow::bail!("pipewire stream error (restarted?)");
     }
     Ok(())
 }

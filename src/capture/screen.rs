@@ -576,15 +576,13 @@ impl Drop for PortalGuard {
         if let Some(session) = self.session.take() {
             let _proxy = self._proxy.take();
             let rt = std::sync::Arc::clone(&self.rt);
-            if let Err(e) = rt.block_on(async move {
-                session
-                    .close()
-                    .await
-                    .context("close screencast session")
+            // ponytail: PipeWire restart can make close hang forever — hard timeout.
+            match rt.block_on(async {
+                tokio::time::timeout(Duration::from_secs(2), session.close()).await
             }) {
-                eprintln!("screencast session close: {e:#}");
-            } else {
-                eprintln!("screencast session closed");
+                Ok(Ok(())) => eprintln!("screencast session closed"),
+                Ok(Err(e)) => eprintln!("screencast session close: {e}"),
+                Err(_) => eprintln!("screencast session close timed out (PipeWire gone?)"),
             }
         }
     }

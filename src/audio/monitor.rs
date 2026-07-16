@@ -1,5 +1,6 @@
-use std::io::Read;
-use std::process::{Command, Stdio};
+use std::io::{ErrorKind, Read};
+use std::os::unix::io::AsRawFd;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
@@ -23,13 +24,14 @@ const PAREC_LATENCY_MS: &str = "20";
 const PAREC_PROCESS_MS: &str = "5";
 // ponytail: ~100Hz one-pole — hats/treble pass less into brightness boost.
 const BASS_LP_ALPHA: f32 = 2.0 * std::f32::consts::PI * 100.0 / SAMPLE_RATE;
+const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
 
 pub struct AudioMonitor {
     snapshot: Arc<AudioSnapshot>,
     status: Arc<Mutex<DaemonStatus>>,
     config: Arc<RwLock<RuntimeConfig>>,
     shutdown: Arc<AtomicBool>,
-    child: Arc<Mutex<Option<std::process::Child>>>,
+    child: Arc<Mutex<Option<Child>>>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -66,10 +68,7 @@ impl AudioMonitor {
         let shutdown = Arc::clone(&self.shutdown);
         let child = Arc::clone(&self.child);
         self.handle = Some(thread::spawn(move || {
-            if let Err(e) = run_capture(snapshot, status.clone(), config, shutdown, child) {
-                eprintln!("audio monitor error: {e:#}");
-                status.lock().unwrap().last_error = Some(format!("audio: {e:#}"));
-            }
+            run_capture_loop(snapshot, status, config, shutdown, child);
         }));
         eprintln!("audio monitor: started");
     }
@@ -81,6 +80,7 @@ impl AudioMonitor {
         self.shutdown.store(true, Ordering::SeqCst);
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
         if let Some(h) = self.handle.take() {
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -94,6 +94,43 @@ impl AudioMonitor {
             }
         }
         eprintln!("audio monitor: stopped");
+    }
+}
+
+fn run_capture_loop(
+    snapshot: Arc<AudioSnapshot>,
+    status: Arc<Mutex<DaemonStatus>>,
+    config: Arc<RwLock<RuntimeConfig>>,
+    shutdown: Arc<AtomicBool>,
+    child_slot: Arc<Mutex<Option<Child>>>,
+) {
+    while !shutdown.load(Ordering::Relaxed) {
+        match run_one_session(
+            Arc::clone(&snapshot),
+            Arc::clone(&status),
+            Arc::clone(&config),
+            Arc::clone(&shutdown),
+            Arc::clone(&child_slot),
+        ) {
+            Ok(()) if shutdown.load(Ordering::Relaxed) => break,
+            Ok(()) => {
+                eprintln!("audio monitor: capture ended — reconnecting in {RECONNECT_BACKOFF:?}");
+                snapshot.store_levels(0.0, 0.0, 0.0, 0.0);
+            }
+            Err(e) => {
+                eprintln!("audio monitor: {e:#} — retry in {RECONNECT_BACKOFF:?}");
+                status.lock().unwrap().last_error = Some(format!("audio: {e:#}"));
+                snapshot.store_levels(0.0, 0.0, 0.0, 0.0);
+            }
+        }
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        // Interruptible backoff so stop() returns quickly.
+        let deadline = Instant::now() + RECONNECT_BACKOFF;
+        while Instant::now() < deadline && !shutdown.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -114,6 +151,14 @@ fn monitor_device(sink: &str) -> String {
     }
 }
 
+fn set_nonblocking(fd: i32) -> anyhow::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    anyhow::ensure!(flags >= 0, "fcntl F_GETFL");
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    anyhow::ensure!(rc == 0, "fcntl F_SETFL O_NONBLOCK");
+    Ok(())
+}
+
 struct CaptureState {
     level_env: Envelope,
     bass_env: Envelope,
@@ -127,12 +172,12 @@ struct CaptureState {
     logged_peak: bool,
 }
 
-fn run_capture(
+fn run_one_session(
     snapshot: Arc<AudioSnapshot>,
     status: Arc<Mutex<DaemonStatus>>,
     config: Arc<RwLock<RuntimeConfig>>,
     shutdown: Arc<AtomicBool>,
-    child_slot: Arc<Mutex<Option<std::process::Child>>>,
+    child_slot: Arc<Mutex<Option<Child>>>,
 ) -> anyhow::Result<()> {
     let sink_name = default_sink_name().context("default audio sink (pactl)")?;
     let device = monitor_device(&sink_name);
@@ -156,6 +201,7 @@ fn run_capture(
         .context("parec (install pulseaudio-utils)")?;
 
     let mut stdout = child.stdout.take().context("parec stdout")?;
+    set_nonblocking(stdout.as_raw_fd())?;
     *child_slot.lock().unwrap() = Some(child);
 
     status.lock().unwrap().last_error = None;
@@ -176,29 +222,49 @@ fn run_capture(
 
     let mut buf = vec![0u8; READ_CHUNK];
     let mut carry = Vec::new();
+    let mut idle_since = Instant::now();
+
     while !shutdown.load(Ordering::Relaxed) {
-        let n = match stdout.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+        // PipeWire restart: parec may exit or hang with no data.
+        if let Some(child) = child_slot.lock().unwrap().as_mut() {
+            if let Ok(Some(status)) = child.try_wait() {
+                eprintln!("audio monitor: parec exited ({status})");
+                break;
+            }
+        }
+
+        match stdout.read(&mut buf) {
+            Ok(0) => {
+                eprintln!("audio monitor: parec EOF");
+                break;
+            }
+            Ok(n) => {
+                idle_since = Instant::now();
+                carry.extend_from_slice(&buf[..n]);
+                let usable = carry.len() / FRAME_BYTES * FRAME_BYTES;
+                if usable < FRAME_BYTES {
+                    continue;
+                }
+                let sensitivity = config.read().unwrap().audio.sensitivity;
+                process_chunk(
+                    &carry[..usable],
+                    &mut state,
+                    &snapshot,
+                    dynamics::from_sensitivity(sensitivity),
+                );
+                carry.drain(..usable);
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                // No audio for a while after PipeWire blip — drop meters, keep waiting briefly.
+                if idle_since.elapsed() > Duration::from_secs(5) {
+                    snapshot.store_levels(0.0, 0.0, 0.0, 0.0);
+                    idle_since = Instant::now();
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => return Err(e.into()),
-        };
-        if n == 0 {
-            continue;
         }
-        carry.extend_from_slice(&buf[..n]);
-        let usable = carry.len() / FRAME_BYTES * FRAME_BYTES;
-        if usable < FRAME_BYTES {
-            continue;
-        }
-        let sensitivity = config.read().unwrap().audio.sensitivity;
-        process_chunk(
-            &carry[..usable],
-            &mut state,
-            &snapshot,
-            dynamics::from_sensitivity(sensitivity),
-        );
-        carry.drain(..usable);
     }
 
     if let Some(mut child) = child_slot.lock().unwrap().take() {
