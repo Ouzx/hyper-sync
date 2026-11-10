@@ -12,11 +12,13 @@ use crossterm::ExecutableCommand;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph};
 use ratatui::Frame;
 
 use crate::daemon::{daemon_running, ipc_request, IpcRequest};
-use crate::effects::solid::{is_rainbow_color, parse_color, rainbow_pixel};
+use crate::effects::solid::{
+    hsv_to_rgb, is_rainbow_color, parse_color, rainbow_pixel, rgb_to_hex, rgb_to_hsv,
+};
 
 const MODES: &[&str] = &[
     "off",
@@ -45,10 +47,21 @@ const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "rainbow",
 ];
+// ponytail: one custom slot — overwrite, never stack custom2
+const COLOR_SLOT_COUNT: usize = COLOR_PRESETS.len() + 1;
+const CUSTOM_COLOR_IDX: usize = COLOR_PRESETS.len();
+const DEFAULT_CUSTOM_HEX: &str = "ff6600";
+const HUE_STEP: f32 = 1.0 / 72.0;
 // 201-byte frames at 115200 baud (the only rate the Skydimo accepts) cap out near 57 fps.
 const FPS_PRESETS: &[u32] = &[24, 30, 45, 55];
 const SPEED_MIN: f32 = 0.1;
 const SPEED_MAX: f32 = 5.0;
+
+struct ColorDial {
+    hue: f32,
+    prev_color: String,
+    prev_custom_hex: String,
+}
 
 pub fn run() -> anyhow::Result<()> {
     ensure_daemon()?;
@@ -107,6 +120,8 @@ struct UiState {
     reactivity: f32,
     sensitivity: f32,
     color_idx: usize,
+    custom_hex: String,
+    color_dial: Option<ColorDial>,
     fps_idx: usize,
     list_cursor: usize,
     digit_buf: String,
@@ -115,8 +130,16 @@ struct UiState {
 
 impl UiState {
     fn sync_color_idx(&mut self) {
+        if self.color_dial.is_some() {
+            return;
+        }
         if let Some(i) = COLOR_PRESETS.iter().position(|c| *c == self.color.as_str()) {
             self.color_idx = i;
+            return;
+        }
+        if parse_color(&self.color).is_ok() {
+            self.custom_hex = self.color.clone();
+            self.color_idx = CUSTOM_COLOR_IDX;
         }
     }
     fn sync_fps_idx(&mut self) {
@@ -157,6 +180,8 @@ impl Default for UiState {
             reactivity: 0.3,
             sensitivity: 0.3,
             color_idx: 7,
+            custom_hex: DEFAULT_CUSTOM_HEX.into(),
+            color_dial: None,
             fps_idx: 1,
             list_cursor: 0,
             digit_buf: String::new(),
@@ -177,6 +202,19 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
 
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+                if state.color_dial.is_some() {
+                    match code {
+                        KeyCode::Esc | KeyCode::Char('q') => close_color_dial(&mut state, false),
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(());
+                        }
+                        KeyCode::Enter => close_color_dial(&mut state, true),
+                        KeyCode::Left => nudge_color_dial(&mut state, -1),
+                        KeyCode::Right => nudge_color_dial(&mut state, 1),
+                        _ => {}
+                    }
+                    continue;
+                }
                 match code {
                     KeyCode::Char('q') | KeyCode::Esc => {
                         if !state.digit_buf.is_empty() {
@@ -186,6 +224,9 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                         }
                     }
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                    KeyCode::Char('c') | KeyCode::Char('C') => {
+                        open_color_dial(&mut state);
+                    }
                     KeyCode::Char('w') | KeyCode::Char('W') => {
                         adjust_brightness(0.05).ok();
                     }
@@ -253,7 +294,9 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
                     state.actual_fps = st.actual_fps;
                     state.speed = st.speed;
                     state.detail = st.detail;
-                    state.color = st.color;
+                    if state.color_dial.is_none() {
+                        state.color = st.color;
+                    }
                     state.width = st.width;
                     state.height = st.height;
                     state.serial_ok = st.serial_ok;
@@ -335,13 +378,21 @@ fn cycle_color(state: &mut UiState, dir: i32) {
     if !uses_accent_color(&state.effect) {
         return;
     }
-    let n = COLOR_PRESETS.len() as i32;
+    let n = COLOR_SLOT_COUNT as i32;
     state.color_idx = (state.color_idx as i32 + dir).rem_euclid(n) as usize;
-    state.color = COLOR_PRESETS[state.color_idx].into();
+    state.color = if state.color_idx == CUSTOM_COLOR_IDX {
+        state.custom_hex.clone()
+    } else {
+        COLOR_PRESETS[state.color_idx].into()
+    };
+    patch_color(&state.color);
+}
+
+fn patch_color(color: &str) {
     ipc_request(&IpcRequest::Patch {
         mode: None,
         brightness: None,
-        color: Some(state.color.clone()),
+        color: Some(color.to_string()),
         fps: None,
         speed: None,
         sound_mode: None,
@@ -349,6 +400,76 @@ fn cycle_color(state: &mut UiState, dir: i32) {
         sensitivity: None,
     })
     .ok();
+}
+
+fn dial_start_hue(state: &UiState) -> f32 {
+    // vivid LED colors: full sat/value; take hue from current hex or saved custom
+    let hex = if parse_color(&state.color).is_ok() {
+        state.color.as_str()
+    } else {
+        state.custom_hex.as_str()
+    };
+    match parse_color(hex) {
+        Ok(rgb) => {
+            let (h, s, _) = rgb_to_hsv(rgb);
+            if s < 0.15 {
+                // near-white/gray — start on a warm vivid hue instead
+                rgb_to_hsv(parse_color(DEFAULT_CUSTOM_HEX).unwrap_or([255, 102, 0])).0
+            } else {
+                h
+            }
+        }
+        Err(_) => rgb_to_hsv(parse_color(DEFAULT_CUSTOM_HEX).unwrap_or([255, 102, 0])).0,
+    }
+}
+
+fn open_color_dial(state: &mut UiState) {
+    if !uses_accent_color(&state.effect) {
+        return;
+    }
+    let hue = dial_start_hue(state);
+    state.color_dial = Some(ColorDial {
+        hue,
+        prev_color: state.color.clone(),
+        prev_custom_hex: state.custom_hex.clone(),
+    });
+    apply_dial_color(state);
+}
+
+fn nudge_color_dial(state: &mut UiState, dir: i32) {
+    let Some(dial) = state.color_dial.as_mut() else {
+        return;
+    };
+    dial.hue = (dial.hue + HUE_STEP * dir as f32).rem_euclid(1.0);
+    apply_dial_color(state);
+}
+
+fn apply_dial_color(state: &mut UiState) {
+    let Some(hue) = state.color_dial.as_ref().map(|d| d.hue) else {
+        return;
+    };
+    // full sat/value = best LED punch
+    let hex = rgb_to_hex(hsv_to_rgb(hue, 1.0, 1.0));
+    state.custom_hex = hex.clone();
+    state.color = hex.clone();
+    state.color_idx = CUSTOM_COLOR_IDX;
+    patch_color(&hex);
+}
+
+fn close_color_dial(state: &mut UiState, commit: bool) {
+    let Some(dial) = state.color_dial.take() else {
+        return;
+    };
+    if commit {
+        state.color_idx = CUSTOM_COLOR_IDX;
+        state.color = state.custom_hex.clone();
+        patch_color(&state.color);
+        return;
+    }
+    state.custom_hex = dial.prev_custom_hex;
+    state.color = dial.prev_color;
+    state.sync_color_idx();
+    patch_color(&state.color);
 }
 
 fn cycle_fps(state: &mut UiState, dir: i32) {
@@ -520,6 +641,9 @@ fn draw_ui(f: &mut Frame, state: &mut UiState) {
     draw_controls_panel(f, left[1], state);
     draw_legend(f, left[2], state);
     draw_effect_list(f, root[1], state);
+    if state.color_dial.is_some() {
+        draw_color_dial(f, state);
+    }
 }
 
 fn draw_status(f: &mut Frame, area: Rect, state: &UiState) {
@@ -674,10 +798,12 @@ fn draw_controls_panel(f: &mut Frame, area: Rect, state: &UiState) {
 }
 
 fn draw_legend(f: &mut Frame, area: Rect, state: &UiState) {
-    let legend = if sound_enabled(state) {
-        "w/s brightness · a/d speed · - = fps · ↑↓ effect · ←→ color · Tab sound · j/k boost · h/l sensitivity · R reselect"
+    let legend = if state.color_dial.is_some() {
+        "←→ hue · Enter set custom · Esc cancel"
+    } else if sound_enabled(state) {
+        "w/s brightness · a/d speed · - = fps · ↑↓ effect · ←→ color · c custom · Tab sound · j/k boost · h/l sensitivity · R reselect"
     } else {
-        "w/s brightness · a/d speed · - = fps · ↑↓ effect · ←→ color · Tab sound · R reselect"
+        "w/s brightness · a/d speed · - = fps · ↑↓ effect · ←→ color · c custom · R reselect"
     };
     f.render_widget(
         Paragraph::new(legend).style(Style::default().fg(Color::DarkGray)),
@@ -898,7 +1024,7 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
         swatch,
     );
 
-    let preset_line: Vec<Span> = COLOR_PRESETS
+    let mut preset_line: Vec<Span> = COLOR_PRESETS
         .iter()
         .enumerate()
         .flat_map(|(i, preset)| {
@@ -937,6 +1063,24 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
         })
         .collect();
 
+    let custom_selected = state.color_idx == CUSTOM_COLOR_IDX;
+    let custom_rgb = parse_color(&state.custom_hex).unwrap_or([255, 102, 0]);
+    let custom_label = if custom_selected {
+        format!("[custom #{}]", state.custom_hex)
+    } else {
+        format!(" custom #{} ", state.custom_hex)
+    };
+    preset_line.push(Span::styled(
+        custom_label,
+        Style::default()
+            .fg(Color::Rgb(custom_rgb[0], custom_rgb[1], custom_rgb[2]))
+            .add_modifier(if custom_selected {
+                Modifier::BOLD | Modifier::UNDERLINED
+            } else {
+                Modifier::empty()
+            }),
+    ));
+
     f.render_widget(
         Paragraph::new(Line::from(if enabled {
             preset_line
@@ -953,4 +1097,94 @@ fn draw_color_picker(f: &mut Frame, area: Rect, state: &UiState) {
             height: inner.height,
         },
     );
+}
+
+fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
+    let width = area.width.saturating_mul(percent_x) / 100;
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn draw_color_dial(f: &mut Frame, state: &UiState) {
+    let Some(dial) = state.color_dial.as_ref() else {
+        return;
+    };
+    let area = centered_rect(70, 7, f.area());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("custom color")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let rgb = hsv_to_rgb(dial.hue, 1.0, 1.0);
+    let hex = rgb_to_hex(rgb);
+
+    let swatch = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: 5.min(inner.width),
+        height: 1,
+    };
+    if swatch.width > 0 {
+        f.render_widget(
+            Paragraph::new("     ").style(Style::default().bg(Color::Rgb(rgb[0], rgb[1], rgb[2]))),
+            swatch,
+        );
+    }
+
+    let bar_x = inner.x.saturating_add(6);
+    let bar_w = inner.width.saturating_sub(6);
+    if bar_w > 0 {
+        let marker = ((dial.hue * bar_w as f32) as u16).min(bar_w.saturating_sub(1));
+        let mut spans = Vec::with_capacity(bar_w as usize);
+        for i in 0..bar_w {
+            let [r, g, b] = hsv_to_rgb(i as f32 / bar_w as f32, 1.0, 1.0);
+            let ch = if i == marker { "▼" } else { "█" };
+            spans.push(Span::styled(
+                ch,
+                Style::default().fg(Color::Rgb(r, g, b)).add_modifier(
+                    if i == marker {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    },
+                ),
+            ));
+        }
+        f.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect {
+                x: bar_x,
+                y: inner.y,
+                width: bar_w,
+                height: 1,
+            },
+        );
+    }
+
+    if inner.height >= 3 {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(format!("#{hex}  ")),
+                Span::styled(
+                    "←→ hue · Enter set · Esc cancel",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])),
+            Rect {
+                x: inner.x,
+                y: inner.y + 2,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
 }

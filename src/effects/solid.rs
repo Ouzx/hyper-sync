@@ -38,6 +38,30 @@ pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
     ]
 }
 
+pub fn rgb_to_hsv(rgb: [u8; 3]) -> (f32, f32, f32) {
+    let r = f32::from(rgb[0]) / 255.0;
+    let g = f32::from(rgb[1]) / 255.0;
+    let b = f32::from(rgb[2]) / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let h = if d < 1e-6 {
+        0.0
+    } else if (max - r).abs() < 1e-6 {
+        ((g - b) / d).rem_euclid(6.0) / 6.0
+    } else if (max - g).abs() < 1e-6 {
+        (((b - r) / d) + 2.0) / 6.0
+    } else {
+        (((r - g) / d) + 4.0) / 6.0
+    };
+    let s = if max < 1e-6 { 0.0 } else { d / max };
+    (h, s, max)
+}
+
+pub fn rgb_to_hex(rgb: [u8; 3]) -> String {
+    format!("{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+}
+
 /// Fixed hue per LED index along the strip (not animated).
 pub fn rainbow_pixel(i: usize, n: usize) -> [u8; 3] {
     let hue = i as f32 / n.max(1) as f32;
