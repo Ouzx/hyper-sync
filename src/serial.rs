@@ -23,11 +23,9 @@ impl SerialWriter {
                 self.reconnect()?;
             }
 
-            match self.port.as_mut().unwrap().write_all(frame) {
-                Ok(()) => {
-                    self.port.as_mut().unwrap().flush()?;
-                    return Ok(());
-                }
+            let port = self.port.as_mut().unwrap();
+            match port.write_all(frame).and_then(|()| port.flush()) {
+                Ok(()) => return Ok(()),
                 Err(e) => {
                     eprintln!("serial write failed: {e}, reconnecting...");
                     self.port = None;
@@ -35,6 +33,10 @@ impl SerialWriter {
                 }
             }
         }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.port.is_some()
     }
 
     fn reconnect(&mut self) -> anyhow::Result<()> {

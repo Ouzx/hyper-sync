@@ -605,6 +605,8 @@ fn run_capture(
                         {
                             st.audio_level = state.audio.level();
                         }
+                    } else {
+                        state.status.lock().unwrap().serial_ok = false;
                     }
                 }
                 *state.last_frame.borrow_mut() = now;

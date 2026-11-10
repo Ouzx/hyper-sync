@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,10 @@ pub const DEFAULT_PORT: &str = "/dev/ttyUSB0";
 pub const DEFAULT_BAUD: u32 = 115_200;
 pub const DEFAULT_LEDS: u8 = 65;
 pub const DEFAULT_FPS: u32 = 30;
+
+/// What config.toml held the last time it matched the daemon's config, so the file watcher
+/// can tell a user's edit apart from our own saves.
+static LAST_SYNCED: Mutex<String> = Mutex::new(String::new());
 
 pub fn config_dir() -> PathBuf {
     std::env::var("XDG_CONFIG_HOME")
@@ -294,7 +299,21 @@ impl RuntimeConfig {
                 .with_context(|| format!("create {}", parent.display()))?;
         }
         let text = toml::to_string_pretty(self).context("serialize config")?;
-        std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
+        std::fs::write(path, &text).with_context(|| format!("write {}", path.display()))?;
+        *LAST_SYNCED.lock().unwrap() = text;
+        Ok(())
+    }
+
+    /// True when this config equals what config.toml held when it last matched the daemon.
+    pub fn is_synced(&self) -> bool {
+        toml::to_string_pretty(self).is_ok_and(|t| t == *LAST_SYNCED.lock().unwrap())
+    }
+
+    /// Record a config read from disk as the daemon's current state.
+    pub fn mark_synced(&self) {
+        if let Ok(text) = toml::to_string_pretty(self) {
+            *LAST_SYNCED.lock().unwrap() = text;
+        }
     }
 
     pub fn device_config(&self) -> DeviceConfig {

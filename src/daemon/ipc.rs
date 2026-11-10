@@ -16,6 +16,7 @@ use crate::config::ensure_layout_file;
 use super::ReloadMsg;
 use crate::daemon::state::DaemonStatus;
 use crate::config::ipc_socket_path;
+use crate::effects::solid::{is_rainbow_color, parse_color};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "lowercase")]
@@ -70,7 +71,9 @@ pub fn ipc_request(req: &IpcRequest) -> anyhow::Result<IpcResponse> {
     let mut reader = BufReader::new(stream);
     let mut buf = String::new();
     reader.read_line(&mut buf)?;
-    serde_json::from_str(buf.trim()).context("parse daemon response")
+    let resp: IpcResponse = serde_json::from_str(buf.trim()).context("parse daemon response")?;
+    anyhow::ensure!(resp.ok, "daemon: {}", resp.error.as_deref().unwrap_or("request failed"));
+    Ok(resp)
 }
 
 pub fn patch_config(patch: IpcRequest) -> anyhow::Result<IpcResponse> {
@@ -110,7 +113,13 @@ pub fn run_server(
                 let reload_tx = reload_tx.clone();
                 let shutdown = Arc::clone(&shutdown);
                 thread::spawn(move || {
-                    let _ = handle_client(stream, config, config_path, status, reload_tx, shutdown);
+                    let reply = stream.try_clone();
+                    if let Err(e) = handle_client(stream, config, config_path, status, reload_tx, shutdown) {
+                        let resp = IpcResponse { ok: false, status: None, error: Some(format!("{e:#}")) };
+                        if let (Ok(mut s), Ok(line)) = (reply, serde_json::to_string(&resp)) {
+                            let _ = writeln!(s, "{line}");
+                        }
+                    }
                 });
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -207,6 +216,13 @@ fn handle_client(
             reactivity,
             sensitivity,
         } => {
+            if let Some(c) = &color {
+                let c = c.trim_start_matches('#');
+                anyhow::ensure!(
+                    is_rainbow_color(c) || parse_color(c).is_ok(),
+                    "invalid color {c:?}: use 6 hex digits (ff3300) or \"rainbow\""
+                );
+            }
             let mode_change = mode.is_some();
             let old_mode = config.read().unwrap().effect.mode;
             {
@@ -277,9 +293,7 @@ fn handle_client(
 }
 
 fn save_config(config: &Arc<RwLock<RuntimeConfig>>, path: &Path) -> anyhow::Result<()> {
-    config.read().unwrap().save(path)?;
-    super::bump_config_save_gen();
-    Ok(())
+    config.read().unwrap().save(path)
 }
 
 fn save_and_notify(
@@ -289,7 +303,6 @@ fn save_and_notify(
     msg: ReloadMsg,
 ) -> anyhow::Result<()> {
     config.read().unwrap().save(path)?;
-    super::bump_config_save_gen();
     reload_tx.send(msg)?;
     Ok(())
 }

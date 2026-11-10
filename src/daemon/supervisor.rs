@@ -23,6 +23,7 @@ pub struct Supervisor {
     handle: Option<JoinHandle<()>>,
     last_effect_key: String,
     last_mode: EffectMode,
+    effect_retry: Option<Instant>,
     #[cfg(feature = "audio")]
     audio: Arc<AudioSnapshot>,
     #[cfg(feature = "screen")]
@@ -57,6 +58,7 @@ impl Supervisor {
             handle: None,
             last_effect_key: String::new(),
             last_mode: cfg.effect.mode,
+            effect_retry: None,
             #[cfg(feature = "audio")]
             audio,
             #[cfg(feature = "screen")]
@@ -193,6 +195,7 @@ impl Supervisor {
 
         let mode = cfg.effect.mode;
         let status_err = Arc::clone(&status);
+        let writer_err = Arc::clone(&writer);
         self.handle = Some(thread::spawn(move || {
             let result = match mode {
                 EffectMode::Off => run_off(&writer, &config, &cancel),
@@ -246,7 +249,10 @@ impl Supervisor {
                 }
             };
             if let Err(e) = result {
-                status_err.lock().unwrap().last_error = Some(e.to_string());
+                let open = writer_err.lock().unwrap().is_open();
+                let mut st = status_err.lock().unwrap();
+                st.last_error = Some(format!("{e:#}"));
+                st.serial_ok = open;
             }
         }));
     }
@@ -285,19 +291,31 @@ impl Supervisor {
                 return;
             }
         }
-        if !self.needs_restart() {
-            return;
+        if self.needs_restart() {
+            eprintln!(
+                "supervisor: reload (mode {} -> {}, key {} -> {})",
+                self.last_mode.as_str(),
+                self.config.read().unwrap().effect.mode.as_str(),
+                self.last_effect_key,
+                self.config.read().unwrap().effect_key(),
+            );
+            self.reload();
+        } else if self.handle.as_ref().is_some_and(|h| h.is_finished())
+            && self.effect_retry.is_none_or(|t| t.elapsed() >= EFFECT_RETRY)
+        {
+            // Effect thread died on its own (USB unplugged, bad color in config.toml) — keep retrying.
+            // Log once per failure streak, not every retry.
+            if self.effect_retry.is_none_or(|t| t.elapsed() > EFFECT_RETRY * 3) {
+                let err = self.status.lock().unwrap().last_error.clone().unwrap_or_default();
+                eprintln!("supervisor: effect stopped ({err}), retrying every {EFFECT_RETRY:?}");
+            }
+            self.effect_retry = Some(Instant::now());
+            self.reload();
         }
-        eprintln!(
-            "supervisor: reload (mode {} -> {}, key {} -> {})",
-            self.last_mode.as_str(),
-            self.config.read().unwrap().effect.mode.as_str(),
-            self.last_effect_key,
-            self.config.read().unwrap().effect_key(),
-        );
-        self.reload();
     }
 }
+
+const EFFECT_RETRY: Duration = Duration::from_secs(2);
 
 fn mode_needs_restart(old: EffectMode, new: EffectMode) -> bool {
     if old == new {

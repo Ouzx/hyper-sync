@@ -7,7 +7,7 @@ pub use ipc::{cleanup_stale_socket, daemon_running, ipc_request, patch_config, w
 pub use state::{DaemonStatus, FpsMeter};
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -16,17 +16,6 @@ use std::time::Duration;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::config::RuntimeConfig;
-
-/// Ignore config-file watcher events briefly after we save (avoids stale read + double reload).
-static CONFIG_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn bump_config_save_gen() {
-    CONFIG_SAVE_GEN.fetch_add(1, Ordering::SeqCst);
-}
-
-pub(crate) fn config_save_gen() -> u64 {
-    CONFIG_SAVE_GEN.load(Ordering::SeqCst)
-}
 
 /// Config changed — restart effect only if `effect_key` changed.
 pub(crate) enum ReloadMsg {
@@ -183,37 +172,45 @@ fn watch_config(
 ) {
     let (tx, rx): (mpsc::Sender<notify::Result<notify::Event>>, Receiver<_>) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).expect("notify watcher");
-    let _ = watcher.watch(path.as_path(), RecursiveMode::NonRecursive);
-    let mut last_seen_save_gen = config_save_gen();
+    // Watch the directory: editors like Kate save by renaming a new file over the old one,
+    // which silently ends a watch on the file itself.
+    let _ = watcher.watch(path.parent().unwrap_or(path), RecursiveMode::NonRecursive);
     while !shutdown.load(Ordering::Relaxed) {
         let event = match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Ok(event)) => event,
             Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
         };
-        if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+        if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
+            || !event.paths.iter().any(|p| p == path)
+        {
             continue;
         }
-        let seen_gen = config_save_gen();
-        if seen_gen != last_seen_save_gen {
-            last_seen_save_gen = seen_gen;
-            thread::sleep(Duration::from_millis(150));
-        }
+        // Let the writer finish, and fold the burst of events one save produces into one.
+        thread::sleep(Duration::from_millis(150));
+        while rx.try_recv().is_ok() {}
         if let Ok(cfg) = RuntimeConfig::load(path) {
+            // TUI/tray/ctl saves land here too — only apply what differs from the daemon's state.
+            if cfg.is_synced() {
+                continue;
+            }
             let (mem_key, mem_mode) = {
                 let current = config.read().unwrap();
                 (current.effect_key(), current.effect.mode)
             };
-            if cfg.effect_key() == mem_key && cfg.effect.mode == mem_mode {
-                continue;
-            }
             eprintln!(
                 "config file changed externally: mode {} -> {}",
                 mem_mode.as_str(),
                 cfg.effect.mode.as_str()
             );
             let new_mode = cfg.effect.mode;
+            let restart = cfg.effect_key() != mem_key || new_mode != mem_mode;
+            // Effects read brightness/color/fps/speed/audio every frame — no restart needed for those.
+            cfg.mark_synced();
             *config.write().unwrap() = cfg;
+            if !restart {
+                continue;
+            }
             let msg = if mem_mode != new_mode {
                 if mem_mode.is_screen() && new_mode.is_screen() {
                     ReloadMsg::Apply
