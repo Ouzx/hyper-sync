@@ -11,9 +11,8 @@ use std::time::{Duration, Instant};
 
 use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::{DaemonStatus, FpsMeter};
+use crate::device::SharedDevice;
 use crate::effects::solid::is_rainbow_color;
-use crate::protocol::build_frame;
-use crate::serial::SerialWriter;
 
 use crate::audio::{maybe_modulate, AudioSnapshot};
 
@@ -89,7 +88,7 @@ pub struct Ctx<'a> {
 /// Run one effect until cancelled or the mode changes. Renderers return full-brightness RGB.
 pub fn run(
     mode: EffectMode,
-    writer: Arc<Mutex<SerialWriter>>,
+    device: SharedDevice,
     config: Arc<RwLock<RuntimeConfig>>,
     cancel: Arc<AtomicBool>,
     status: Arc<Mutex<DaemonStatus>>,
@@ -135,7 +134,7 @@ pub fn run(
         );
         finish(&mut rgb, &cfg, 1.0, &audio);
         let shown = to_hex(&rgb);
-        writer.lock().unwrap().write_frame(&build_frame(cfg.device.leds, &rgb)?)?;
+        device.lock().unwrap().show(&rgb)?;
 
         let actual = fps_meter.tick();
         {

@@ -5,8 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
-use crate::protocol::black_frame;
-use crate::serial::SerialWriter;
+use crate::device::SharedDevice;
 
 #[cfg(feature = "screen")]
 use crate::capture::worker::{ScreenWorker, WorkerState};
@@ -17,7 +16,7 @@ pub struct Supervisor {
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
     cancel: Arc<AtomicBool>,
-    writer: Arc<Mutex<SerialWriter>>,
+    device: SharedDevice,
     handle: Option<JoinHandle<()>>,
     last_effect_key: String,
     last_mode: EffectMode,
@@ -38,19 +37,19 @@ impl Supervisor {
         audio: Arc<AudioSnapshot>,
     ) -> Self {
         let cfg = config.read().unwrap().clone();
-        let writer = Arc::new(Mutex::new(SerialWriter::new(cfg.device_config())));
+        let device = Arc::new(Mutex::new(crate::device::open(&cfg.device)));
         #[cfg(feature = "screen")]
         let screen = ScreenWorker::new(
             Arc::clone(&config),
             Arc::clone(&status),
-            Arc::clone(&writer),
+            Arc::clone(&device),
             Arc::clone(&audio),
         );
         Self {
             config,
             status,
             cancel: Arc::new(AtomicBool::new(false)),
-            writer,
+            device,
             handle: None,
             last_effect_key: String::new(),
             last_mode: cfg.effect.mode,
@@ -182,19 +181,18 @@ impl Supervisor {
         let cancel = Arc::clone(&self.cancel);
         let config = Arc::clone(&self.config);
         let status = Arc::clone(&self.status);
-        let writer = Arc::clone(&self.writer);
+        let device = Arc::clone(&self.device);
         let audio = Arc::clone(&self.audio);
 
         let mode = cfg.effect.mode;
         let status_err = Arc::clone(&status);
-        let writer_err = Arc::clone(&writer);
         self.handle = Some(thread::spawn(move || {
             let result = match mode {
-                EffectMode::Off => run_off(&writer, &config, &cancel),
+                EffectMode::Off => run_off(&device, &config, &cancel),
                 EffectMode::Screen | EffectMode::ScreenCenter => unreachable!("screen uses worker"),
                 _ => crate::effects::run(
                     mode,
-                    writer,
+                    device,
                     config,
                     cancel,
                     status,
@@ -202,10 +200,10 @@ impl Supervisor {
                 ),
             };
             if let Err(e) = result {
-                let open = writer_err.lock().unwrap().is_open();
+                // Effects only fail when the device does (unplugged, unreachable).
                 let mut st = status_err.lock().unwrap();
                 st.last_error = Some(format!("{e:#}"));
-                st.serial_ok = open;
+                st.serial_ok = false;
             }
         }));
     }
@@ -284,16 +282,11 @@ fn mode_needs_restart(old: EffectMode, new: EffectMode) -> bool {
     true
 }
 
-fn run_off(
-    writer: &Arc<Mutex<SerialWriter>>,
-    config: &Arc<RwLock<RuntimeConfig>>,
-    cancel: &AtomicBool,
-) -> anyhow::Result<()> {
-    let leds = config.read().unwrap().device.leds;
-    let frame = black_frame(leds);
+fn run_off(device: &SharedDevice, config: &Arc<RwLock<RuntimeConfig>>, cancel: &AtomicBool) -> anyhow::Result<()> {
+    let black = vec![0; usize::from(config.read().unwrap().device.leds) * 3];
     let interval = Duration::from_millis(200);
     while !cancel.load(Ordering::Relaxed) {
-        writer.lock().unwrap().write_frame(&frame)?;
+        device.lock().unwrap().show(&black)?;
         thread::sleep(interval);
     }
     Ok(())

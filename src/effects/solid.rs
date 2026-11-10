@@ -1,6 +1,4 @@
-use crate::config::DeviceConfig;
-use crate::protocol::build_frame;
-use crate::serial::SerialWriter;
+use crate::config::DeviceSection;
 
 pub fn parse_color(hex: &str) -> anyhow::Result<[u8; 3]> {
     let s = hex.trim_start_matches('#');
@@ -94,36 +92,18 @@ pub fn scale_rgb_buf(rgb: &mut [u8], brightness: f32) {
     }
 }
 
-pub fn run(
-    cfg: DeviceConfig,
-    color: [u8; 3],
-    brightness: f32,
-    fps: u32,
-) -> anyhow::Result<()> {
-    let scaled = scale_rgb(color, brightness);
-    let n = usize::from(cfg.leds);
-    let rgb: Vec<u8> = scaled
-        .iter()
-        .cycle()
-        .take(n * 3)
-        .copied()
-        .collect();
-
-    let frame = build_frame(cfg.leds, &rgb)?;
-    let mut writer = SerialWriter::new(cfg);
+pub fn run(device: &DeviceSection, color: [u8; 3], brightness: f32, fps: u32) -> anyhow::Result<()> {
+    let rgb = scale_rgb(color, brightness).repeat(usize::from(device.leds));
+    let mut led_device = crate::device::open(device);
     let interval = crate::config::frame_interval(fps);
-
     loop {
-        writer.write_frame(&frame)?;
+        led_device.show(&rgb)?;
         std::thread::sleep(interval);
     }
 }
 
-pub fn run_off(cfg: DeviceConfig) -> anyhow::Result<()> {
-    let frame = crate::protocol::black_frame(cfg.leds);
-    let mut writer = SerialWriter::new(cfg);
-    writer.write_frame(&frame)?;
-    Ok(())
+pub fn run_off(device: &DeviceSection) -> anyhow::Result<()> {
+    crate::device::open(device).show(&vec![0; usize::from(device.leds) * 3])
 }
 
 pub fn render(c: &mut crate::effects::Ctx) -> Vec<u8> {

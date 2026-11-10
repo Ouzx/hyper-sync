@@ -2,7 +2,7 @@
 
 Low-latency LED sync for **Skydimo** strips on Linux/Wayland. A single Rust binary drives 65 RGB LEDs over USB serial, mirrors screen edges via **xdg-desktop-portal + PipeWire**, and optionally reacts to system audio — no Node/Bun runtime, no multi-platform baggage.
 
-Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, a TUI with a live strip preview, a tray menu, 46 effects (including ports of Hyperion.ng's) and music-reactive lighting.
+Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, a TUI with a live strip preview, a tray menu, 46 effects (including ports of Hyperion.ng's) and music-reactive lighting. Other LED devices plug in behind one small trait (see [Adding a device](#adding-a-device)).
 
 ## Hardware
 
@@ -33,8 +33,7 @@ flowchart LR
     FX[effects engine]
     AUD[audio monitor]
     CAP[screen worker]
-    PROTO[Skydimo frame builder]
-    SER[serial writer]
+    DEV["device (Skydimo, none, …)"]
   end
 
   subgraph capture [Screen path]
@@ -46,19 +45,19 @@ flowchart LR
   TUI --> IPC
   TRAY --> IPC
   CLI --> IPC
-  IPC --> SUP --> FX --> PROTO --> SER --> USB["/dev/ttyUSB0"]
-  SUP --> CAP
-  PORTAL --> PW --> SAMP --> CAP --> FX
+  IPC --> SUP --> FX --> DEV --> USB["/dev/ttyUSB0"]
+  SUP --> CAP --> DEV
+  PORTAL --> PW --> SAMP --> CAP
   AUD -->|brightness & tempo| FX
 ```
 
-One process owns the serial port. TUI and tray are thin IPC clients; legacy subcommands (`solid`, `screen`, …) patch the running daemon when it is already up.
+One process owns the device. TUI and tray are thin IPC clients; legacy subcommands (`solid`, `screen`, …) patch the running daemon when it is already up.
 
 ## Features
 
 ### Daemon & control
 
-- Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`): every setting applies live (except `[device] port`, which needs a daemon restart), also from editors that save by renaming
+- Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`): every setting applies live (except the `[device]` section, which needs a daemon restart), also from editors that save by renaming
 - **Unix socket IPC** — `$XDG_RUNTIME_DIR/hyper-sync.sock`, answered at once
 - **`hyper-sync ctl`** — status (plain/JSON), stop, restart, quit, reselect screen, flash, patch settings; invalid values are rejected with a message
 - **Serial reconnect** on USB unplug/replug; a stopped effect is retried every 2 s and `serial_ok` reports a missing strip
@@ -200,7 +199,7 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 
 - Linux with **Wayland** (KDE Plasma tested)
 - Rust toolchain
-- Skydimo controller on USB serial
+- Skydimo controller on USB serial (or `driver = "none"` to try it without one)
 - For **screen** mode: `pipewire-devel`, `gcc` (bindgen), portal screencast permission
 - For **audio**: `parec` (PipeWire)
 - For lights-off on lock: `gdbus` (glib2); for "edit settings": `xdg-open` or `$EDITOR`
@@ -288,6 +287,7 @@ Existing config files are not overwritten — delete or edit `config.toml` to pi
 
 ```toml
 [device]
+driver = "skydimo"   # skydimo | none (no hardware: the TUI preview only)
 port = "/dev/ttyUSB0"
 leds = 65
 
@@ -343,14 +343,16 @@ hyper-sync install app | service
 hyper-sync uninstall app | service
 ```
 
-### Direct modes (standalone or IPC patch when daemon runs)
+### Direct modes
+
+With the daemon running these change its settings, only the ones you pass. Without it they drive the LEDs themselves, on the device from `config.toml`; `--port`, `--leds`, `--monitor` and `--layout` apply only then.
 
 ```bash
-hyper-sync solid  --port /dev/ttyUSB0 --leds 65 --color ff3300 --brightness 0.15 --fps 30
-hyper-sync candle --port /dev/ttyUSB0 --leds 65 --warmth 0.9 --speed 1.0 --fps 30
-hyper-sync screen --port /dev/ttyUSB0 --leds 65 --fps 30 --brightness 0.15 --monitor 0
-hyper-sync screen --forget-portal          # clear saved screencast permission
-hyper-sync off    --port /dev/ttyUSB0 --leds 65
+hyper-sync solid  --color ff3300 --brightness 0.15 --fps 30
+hyper-sync candle --warmth 0.9 --speed 1.0
+hyper-sync screen --brightness 0.15 --port /dev/ttyUSB1 --leds 65
+hyper-sync screen --forget-portal          # clear saved screencast permission and pick again
+hyper-sync off
 ```
 
 ### Screen capture permission
@@ -361,7 +363,7 @@ Press **`R`** in the TUI (or tray **Screen sync → Choose another screen…**) 
 
 ## Protocol
 
-Skydimo frame (not standard Adalight — **no checksum**):
+Skydimo frame ([`src/device/skydimo.rs`](src/device/skydimo.rs); not standard Adalight — **no checksum**):
 
 ```
 [0..2]  'A' 'd' 'a'     (0x41 0x64 0x61)
@@ -371,6 +373,18 @@ Skydimo frame (not standard Adalight — **no checksum**):
 ```
 
 Total: **201 bytes** per frame.
+
+## Adding a device
+
+Effects and screen sync hand every frame to a [`Device`](src/device/mod.rs): R,G,B per LED in strip order, with brightness, gamma, sound and flash already applied. A device only has to get that frame onto its LEDs, so a new one touches nothing else (effects, daemon, TUI, tray):
+
+1. `src/device/<name>.rs`: a type that implements `Device::show(&mut self, rgb: &[u8])`. [`skydimo.rs`](src/device/skydimo.rs) is the example; a serial device can reuse `SerialWriter`, which reopens the port after an unplug.
+2. A variant in `Driver` and its line in `device::open` ([`src/device/mod.rs`](src/device/mod.rs)).
+3. `[device] driver = "<name>"` in `config.toml`, with `port` and `leds` as it needs. A driver change applies on the next daemon start.
+
+`driver = "none"` runs with no hardware: frames only show in the TUI preview, for trying hyper-sync or working on effects.
+
+Limits today: up to 255 LEDs (`leds` is a byte), 55 fps, and the effects draw on the U-shaped strip (right, top, left).
 
 ## Performance notes
 
@@ -394,6 +408,7 @@ Total: **201 bytes** per frame.
 | + | Daemon, TUI, tray, animated effects, audio overlay | Done |
 | + | Frame pacing, audio spectrum fix, gamma, Hyperion ports, favorites, stats panel, live tray menu, new icon | Done |
 | + | Review: screen-permission and capture-handoff fixes, less CPU and fewer threads, one pinned build, warning-free code | Done |
+| + | Device drivers behind one trait (`skydimo`, `none`) | Done |
 
 ## License
 

@@ -19,9 +19,8 @@ use crate::capture::screen::{open_portal_session, wait_for_graphical_session, wa
 use crate::capture::negotiate;
 use crate::config::{self, EffectMode, LayoutConfig, RuntimeConfig};
 use crate::daemon::{DaemonStatus, FpsMeter};
+use crate::device::SharedDevice;
 use crate::effects::finish;
-use crate::protocol::build_frame;
-use crate::serial::SerialWriter;
 
 use crate::audio::AudioSnapshot;
 
@@ -55,7 +54,7 @@ impl ScreenWorker {
     pub fn new(
         config: Arc<RwLock<RuntimeConfig>>,
         status: Arc<Mutex<DaemonStatus>>,
-        writer: Arc<Mutex<SerialWriter>>,
+        device: SharedDevice,
         audio: Arc<AudioSnapshot>,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -75,7 +74,7 @@ impl ScreenWorker {
                 worker_state,
                 config,
                 status,
-                writer,
+                device,
                 audio,
             );
         });
@@ -155,7 +154,7 @@ fn worker_loop(
     state: Arc<Mutex<WorkerState>>,
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
-    writer: Arc<Mutex<SerialWriter>>,
+    device: SharedDevice,
     audio: Arc<AudioSnapshot>,
 ) {
     let rt = Arc::new(
@@ -205,7 +204,7 @@ fn worker_loop(
                 Arc::clone(&state),
                 Arc::clone(&config),
                 Arc::clone(&status),
-                Arc::clone(&writer),
+                Arc::clone(&device),
                 Arc::clone(&audio),
             );
             // No sleep here: the next capture waits out the rest of PORTAL_SETTLE before opening.
@@ -255,7 +254,7 @@ fn wait_portal_settle(last_close: &Cell<Option<Instant>>) {
 }
 
 struct CtrlFrameState {
-    writer: Arc<Mutex<SerialWriter>>,
+    device: SharedDevice,
     config: Arc<RwLock<RuntimeConfig>>,
     zones: Rc<Vec<config::EdgeZone>>,
     format: std::cell::RefCell<Option<pw::spa::param::video::VideoFormat>>,
@@ -281,7 +280,7 @@ fn run_capture(
     worker_state: Arc<Mutex<WorkerState>>,
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
-    writer: Arc<Mutex<SerialWriter>>,
+    device: SharedDevice,
     audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     if cancel.load(Ordering::Relaxed) {
@@ -382,7 +381,7 @@ fn run_capture(
 
     let min_interval = config::frame_interval(config.read().unwrap().effect.fps);
     let frame_state = Rc::new(CtrlFrameState {
-        writer,
+        device,
         config: Arc::clone(&config),
         zones,
         format: std::cell::RefCell::new(None),
@@ -510,29 +509,27 @@ fn run_capture(
                 finish(&mut rgb, &cfg, cfg.screen.gamma, &state.audio);
                 // Copy what the status needs before letting go: taking `config` while holding
                 // `status` (others lock config, then status) can deadlock when a writer queues.
-                let (leds, brightness, fps) = (cfg.device.leds, cfg.effect.brightness, cfg.effect.fps);
+                let (brightness, fps) = (cfg.effect.brightness, cfg.effect.fps);
                 drop(cfg);
 
-                if let Ok(packet) = build_frame(leds, &rgb) {
-                    if state.writer.lock().unwrap().write_frame(&packet).is_ok() {
-                        if !*state.got_frame.borrow() {
-                            eprintln!("first frame sent to LEDs");
-                            *state.got_frame.borrow_mut() = true;
-                        }
-                        let actual = state.fps_meter.borrow_mut().tick();
-                        let mut st = state.status.lock().unwrap();
-                        st.brightness = brightness;
-                        st.fps = fps;
-                        st.actual_fps = actual;
-                        st.width = width;
-                        st.height = height;
-                        st.serial_ok = true;
-                        st.detail = format!("{width}x{height}");
-                        st.leds = crate::effects::to_hex(&rgb);
-                        st.audio_level = state.audio.level();
-                    } else {
-                        state.status.lock().unwrap().serial_ok = false;
+                if state.device.lock().unwrap().show(&rgb).is_ok() {
+                    if !*state.got_frame.borrow() {
+                        eprintln!("first frame sent to LEDs");
+                        *state.got_frame.borrow_mut() = true;
                     }
+                    let actual = state.fps_meter.borrow_mut().tick();
+                    let mut st = state.status.lock().unwrap();
+                    st.brightness = brightness;
+                    st.fps = fps;
+                    st.actual_fps = actual;
+                    st.width = width;
+                    st.height = height;
+                    st.serial_ok = true;
+                    st.detail = format!("{width}x{height}");
+                    st.leds = crate::effects::to_hex(&rgb);
+                    st.audio_level = state.audio.level();
+                } else {
+                    state.status.lock().unwrap().serial_ok = false;
                 }
                 *state.last_frame.borrow_mut() = if now - due < min_interval { due } else { now };
             }

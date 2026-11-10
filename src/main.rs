@@ -3,10 +3,10 @@ mod capture;
 mod config;
 #[cfg(feature = "daemon")]
 mod daemon;
+mod device;
 mod effects;
 mod install;
 mod layout;
-mod protocol;
 mod serial;
 mod audio;
 #[cfg(feature = "tui")]
@@ -17,7 +17,7 @@ mod tray;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use config::DeviceConfig;
+use config::DeviceSection;
 
 #[cfg(feature = "screen")]
 use anyhow::Context;
@@ -62,52 +62,72 @@ enum Commands {
         #[command(subcommand)]
         target: install::InstallTarget,
     },
+    // Direct modes: with the daemon running they change its settings (only the options you pass);
+    // without it they drive the LEDs themselves, on the device from config.toml.
     /// Solid color on all LEDs
     Solid {
-        #[arg(long, default_value = config::DEFAULT_PORT)]
-        port: String,
-        #[arg(long, default_value_t = config::DEFAULT_LEDS)]
-        leds: u8,
-        #[arg(long, default_value = "ff3300")]
-        color: String,
-        #[arg(long, default_value_t = 0.8)]
-        brightness: f32,
-        #[arg(long, default_value_t = config::DEFAULT_FPS)]
-        fps: u32,
+        /// Serial port [default: config.toml's]
+        #[arg(long)]
+        port: Option<String>,
+        /// LED count [default: config.toml's]
+        #[arg(long)]
+        leds: Option<u8>,
+        /// [default: ff3300]
+        #[arg(long)]
+        color: Option<String>,
+        /// [default: 0.8]
+        #[arg(long)]
+        brightness: Option<f32>,
+        /// [default: 30]
+        #[arg(long)]
+        fps: Option<u32>,
     },
     /// Turn all LEDs off
     Off {
-        #[arg(long, default_value = config::DEFAULT_PORT)]
-        port: String,
-        #[arg(long, default_value_t = config::DEFAULT_LEDS)]
-        leds: u8,
+        /// Serial port [default: config.toml's]
+        #[arg(long)]
+        port: Option<String>,
+        /// LED count [default: config.toml's]
+        #[arg(long)]
+        leds: Option<u8>,
     },
     /// Candle flicker effect
     Candle {
-        #[arg(long, default_value = config::DEFAULT_PORT)]
-        port: String,
-        #[arg(long, default_value_t = config::DEFAULT_LEDS)]
-        leds: u8,
-        #[arg(long, default_value_t = 0.9)]
-        warmth: f32,
-        #[arg(long, default_value_t = 1.0)]
-        speed: f32,
-        #[arg(long, default_value_t = config::DEFAULT_FPS)]
-        fps: u32,
+        /// Serial port [default: config.toml's]
+        #[arg(long)]
+        port: Option<String>,
+        /// LED count [default: config.toml's]
+        #[arg(long)]
+        leds: Option<u8>,
+        /// 0 = accent color, 1 = candle amber [default: 0.9]
+        #[arg(long)]
+        warmth: Option<f32>,
+        /// [default: 1.0]
+        #[arg(long)]
+        speed: Option<f32>,
+        /// [default: 30]
+        #[arg(long)]
+        fps: Option<u32>,
     },
     /// Screen edge sync via PipeWire portal
     Screen {
-        #[arg(long, default_value = config::DEFAULT_PORT)]
-        port: String,
-        #[arg(long, default_value_t = config::DEFAULT_LEDS)]
-        leds: u8,
-        #[arg(long, default_value_t = 0.8)]
-        brightness: f32,
-        #[arg(long, default_value_t = config::DEFAULT_FPS)]
-        fps: u32,
+        /// Serial port [default: config.toml's]
+        #[arg(long)]
+        port: Option<String>,
+        /// LED count [default: config.toml's]
+        #[arg(long)]
+        leds: Option<u8>,
+        /// [default: 0.8]
+        #[arg(long)]
+        brightness: Option<f32>,
+        /// [default: 30]
+        #[arg(long)]
+        fps: Option<u32>,
+        /// Without the daemon only (it uses config.toml's)
         #[arg(long, default_value = "0")]
         monitor: u32,
-        #[arg(long, default_value = "config/layout.toml")]
+        /// Without the daemon only; relative paths look in ~/.config/hyper-sync first
+        #[arg(long, default_value = "layout.toml")]
         layout: PathBuf,
         #[arg(long, help = "Clear saved portal permission and re-prompt")]
         forget_portal: bool,
@@ -179,35 +199,25 @@ fn main() -> anyhow::Result<()> {
         Commands::Ctl { action } => run_ctl(action),
         Commands::Install { target } => install::run_install(target),
         Commands::Uninstall { target } => install::run_uninstall(target),
-        Commands::Solid {
-            port,
-            leds,
-            color,
-            brightness,
-            fps,
-        } => {
+        Commands::Solid { port, leds, color, brightness, fps } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
                 patch_config(IpcRequest::Patch(Patch {
                     mode: Some("solid".into()),
-                    brightness: Some(brightness),
-                    color: Some(color.clone()),
-                    fps: Some(fps),
+                    brightness,
+                    color: color.clone(),
+                    fps,
                     ..Default::default()
                 }))
             })? {
                 return Ok(());
             }
-            let rgb = effects::solid::parse_color(&color)?;
+            let rgb = effects::solid::parse_color(color.as_deref().unwrap_or("ff3300"))?;
             effects::solid::run(
-                DeviceConfig {
-                    port,
-                    baud: config::DEFAULT_BAUD,
-                    leds,
-                },
+                &device(port, leds),
                 rgb,
-                brightness,
-                fps,
+                brightness.unwrap_or(0.8),
+                fps.unwrap_or(config::DEFAULT_FPS),
             )
         }
         Commands::Off { port, leds } => {
@@ -215,58 +225,41 @@ fn main() -> anyhow::Result<()> {
             if try_ipc_legacy(|| patch_config(IpcRequest::Stop))? {
                 return Ok(());
             }
-            effects::solid::run_off(DeviceConfig {
-                port,
-                baud: config::DEFAULT_BAUD,
-                leds,
-            })
+            effects::solid::run_off(&device(port, leds))
         }
-        Commands::Candle {
-            port,
-            leds,
-            warmth,
-            speed,
-            fps,
-        } => {
+        Commands::Candle { port, leds, warmth, speed, fps } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
                 patch_config(IpcRequest::Patch(Patch {
                     mode: Some("candle".into()),
-                    fps: Some(fps),
-                    speed: Some(speed),
+                    warmth,
+                    speed,
+                    fps,
                     ..Default::default()
                 }))
             })? {
                 return Ok(());
             }
             effects::candle::run(
-                DeviceConfig {
-                    port,
-                    baud: config::DEFAULT_BAUD,
-                    leds,
-                },
-                warmth,
-                speed,
-                fps,
+                device(port, leds),
+                warmth.unwrap_or(0.9),
+                speed.unwrap_or(1.0),
+                fps.unwrap_or(config::DEFAULT_FPS),
             )
         }
-        Commands::Screen {
-            port,
-            leds,
-            brightness,
-            fps,
-            monitor,
-            layout,
-            forget_portal,
-        } => {
+        Commands::Screen { port, leds, brightness, fps, monitor, layout, forget_portal } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
-                patch_config(IpcRequest::Patch(Patch {
+                let resp = patch_config(IpcRequest::Patch(Patch {
                     mode: Some("screen".into()),
-                    brightness: Some(brightness),
-                    fps: Some(fps),
+                    brightness,
+                    fps,
                     ..Default::default()
-                }))
+                }))?;
+                if forget_portal {
+                    return ipc_request(&IpcRequest::ReselectScreen);
+                }
+                Ok(resp)
             })? {
                 return Ok(());
             }
@@ -278,15 +271,11 @@ fn main() -> anyhow::Result<()> {
                     .context("layout path is not valid UTF-8")?;
                 eprintln!("using layout {layout_path}");
                 capture::screen::run(
-                    DeviceConfig {
-                        port,
-                        baud: config::DEFAULT_BAUD,
-                        leds,
-                    },
+                    device(port, leds),
                     layout_path,
-                    fps,
+                    fps.unwrap_or(config::DEFAULT_FPS),
                     monitor,
-                    brightness,
+                    brightness.unwrap_or(0.8),
                     forget_portal,
                 )
             }
@@ -299,6 +288,18 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// The device from config.toml, with `--port` / `--leds` on top.
+fn device(port: Option<String>, leds: Option<u8>) -> DeviceSection {
+    let mut device = config::RuntimeConfig::load(&config::runtime_config_path()).unwrap_or_default().device;
+    if let Some(port) = port {
+        device.port = port;
+    }
+    if let Some(leds) = leds {
+        device.leds = leds;
+    }
+    device
 }
 
 #[cfg(feature = "daemon")]

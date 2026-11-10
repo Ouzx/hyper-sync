@@ -2,6 +2,7 @@
 # Hand edits apply live; `hyper-sync tui` and the tray change the same file.
 
 [device]
+driver = "skydimo"   # skydimo | none (no hardware: the TUI preview only); see src/device/
 port = "/dev/ttyUSB0"
 leds = 65
 

@@ -20,14 +20,12 @@ use pw::types::ObjectType;
 
 use crate::capture::negotiate;
 use crate::capture::sample;
-use crate::config::{self, DeviceConfig, EdgeZone, LayoutConfig};
+use crate::config::{self, DeviceSection, EdgeZone, LayoutConfig};
 use crate::effects::solid::scale_rgb_buf;
-use crate::protocol::build_frame;
-use crate::serial::SerialWriter;
+use crate::device::Device;
 
 struct FrameState {
-    writer: Rc<RefCell<SerialWriter>>,
-    device: Rc<RefCell<DeviceConfig>>,
+    device: RefCell<Box<dyn Device>>,
     zones: Rc<Vec<EdgeZone>>,
     format: RefCell<Option<pw::spa::param::video::VideoFormat>>,
     width: Arc<AtomicU32>,
@@ -170,7 +168,7 @@ pub(crate) fn wait_for_registry_target(
 }
 
 pub fn run(
-    device: DeviceConfig,
+    device: DeviceSection,
     layout_path: &str,
     fps: u32,
     monitor: u32,
@@ -216,8 +214,7 @@ pub fn run(
 
     let min_interval = Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
     let state = Rc::new(FrameState {
-        writer: Rc::new(RefCell::new(SerialWriter::new(device.clone()))),
-        device: Rc::new(RefCell::new(device)),
+        device: RefCell::new(crate::device::open(&device)),
         zones: Rc::new(zones),
         format: RefCell::new(None),
         width: width.clone(),
@@ -303,12 +300,9 @@ pub fn run(
 
                 let mut rgb = sample::sample_edges(datas, format, width, height, &state.zones);
                 scale_rgb_buf(&mut rgb, state.brightness);
-                let leds = state.device.borrow().leds;
-                if let Ok(packet) = build_frame(leds, &rgb) {
-                    if state.writer.borrow_mut().write_frame(&packet).is_ok() && !*state.got_frame.borrow() {
-                        eprintln!("first frame sent to LEDs");
-                        *state.got_frame.borrow_mut() = true;
-                    }
+                if state.device.borrow_mut().show(&rgb).is_ok() && !*state.got_frame.borrow() {
+                    eprintln!("first frame sent to LEDs");
+                    *state.got_frame.borrow_mut() = true;
                 }
                 *state.last_frame.borrow_mut() = now;
             }

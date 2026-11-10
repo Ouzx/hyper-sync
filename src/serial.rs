@@ -5,16 +5,16 @@ use std::time::Duration;
 use anyhow::Context;
 use serialport::{DataBits, FlowControl, Parity, StopBits};
 
-use crate::config::DeviceConfig;
-
+/// A serial port that reopens itself after a write fails (USB unplugged and plugged back).
 pub struct SerialWriter {
-    cfg: DeviceConfig,
+    path: String,
+    baud: u32,
     port: Option<Box<dyn serialport::SerialPort>>,
 }
 
 impl SerialWriter {
-    pub fn new(cfg: DeviceConfig) -> Self {
-        Self { cfg, port: None }
+    pub fn new(path: &str, baud: u32) -> Self {
+        Self { path: path.into(), baud, port: None }
     }
 
     pub fn write_frame(&mut self, frame: &[u8]) -> anyhow::Result<()> {
@@ -37,19 +37,15 @@ impl SerialWriter {
         }
     }
 
-    pub fn is_open(&self) -> bool {
-        self.port.is_some()
-    }
-
     fn reconnect(&mut self) -> anyhow::Result<()> {
-        let port = serialport::new(&self.cfg.port, self.cfg.baud)
+        let port = serialport::new(&self.path, self.baud)
             .data_bits(DataBits::Eight)
             .parity(Parity::None)
             .stop_bits(StopBits::One)
             .flow_control(FlowControl::None)
             .timeout(Duration::from_millis(100))
             .open()
-            .with_context(|| format!("open serial port {}", self.cfg.port))?;
+            .with_context(|| format!("open serial port {}", self.path))?;
         self.port = Some(port);
         Ok(())
     }

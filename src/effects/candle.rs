@@ -1,29 +1,28 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::config::{DeviceConfig, EffectMode, RuntimeConfig};
+use crate::config::{DeviceSection, EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
 use crate::effects::solid::resolve_pixel_color;
 use crate::effects::{noise, swing, Ctx};
-use crate::serial::SerialWriter;
 
 /// Candle-flame amber; `warmth` blends the accent color toward it.
 const AMBER: [f32; 3] = [255.0, 147.0, 41.0];
 
 /// Standalone `hyper-sync candle` (no daemon).
-pub fn run(cfg: DeviceConfig, warmth: f32, speed: f32, fps: u32) -> anyhow::Result<()> {
+pub fn run(device: DeviceSection, warmth: f32, speed: f32, fps: u32) -> anyhow::Result<()> {
     let mut rc = RuntimeConfig::default();
-    rc.device.port = cfg.port.clone();
-    rc.device.leds = cfg.leds;
     rc.effect.mode = EffectMode::Candle;
     rc.effect.brightness = 1.0;
     rc.effect.fps = fps;
     rc.effect.speed = speed;
     rc.solid.color = "ff5032".into();
     rc.candle.warmth = warmth;
+    let led_device = crate::device::open(&device);
+    rc.device = device;
     super::run(
         EffectMode::Candle,
-        Arc::new(Mutex::new(SerialWriter::new(cfg))),
+        Arc::new(Mutex::new(led_device)),
         Arc::new(RwLock::new(rc)),
         Arc::new(AtomicBool::new(false)),
         Arc::new(Mutex::new(DaemonStatus::default())),

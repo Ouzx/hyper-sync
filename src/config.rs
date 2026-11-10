@@ -4,8 +4,9 @@ use std::sync::Mutex;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+use crate::device::Driver;
+
 pub const DEFAULT_PORT: &str = "/dev/ttyUSB0";
-pub const DEFAULT_BAUD: u32 = 115_200;
 pub const DEFAULT_LEDS: u8 = 65;
 pub const DEFAULT_FPS: u32 = 30;
 /// A frame takes 17.4 ms on the wire at 115200 baud (~57 fps). Writes don't wait for the wire,
@@ -209,6 +210,9 @@ pub struct RuntimeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceSection {
+    /// Which kind of device drives the LEDs (see src/device/).
+    #[serde(default)]
+    pub driver: Driver,
     #[serde(default = "default_port")]
     pub port: String,
     #[serde(default = "default_leds")]
@@ -326,6 +330,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             device: DeviceSection {
+                driver: Driver::default(),
                 port: default_port(),
                 leds: default_leds(),
             },
@@ -414,14 +419,6 @@ impl RuntimeConfig {
         }
     }
 
-    pub fn device_config(&self) -> DeviceConfig {
-        DeviceConfig {
-            port: self.device.port.clone(),
-            baud: DEFAULT_BAUD,
-            leds: self.device.leds,
-        }
-    }
-
     pub fn effect_key(&self) -> String {
         match self.effect.mode {
             EffectMode::Rainbow => "solid".into(),
@@ -430,23 +427,6 @@ impl RuntimeConfig {
                 format!("screen:{}:{}", self.screen.monitor, self.screen.layout)
             }
             mode => mode.as_str().into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DeviceConfig {
-    pub port: String,
-    pub baud: u32,
-    pub leds: u8,
-}
-
-impl Default for DeviceConfig {
-    fn default() -> Self {
-        Self {
-            port: DEFAULT_PORT.into(),
-            baud: DEFAULT_BAUD,
-            leds: DEFAULT_LEDS,
         }
     }
 }
@@ -486,44 +466,18 @@ pub fn ensure_layout_file() -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
+/// A layout from config.toml or `--layout`: absolute, in the config dir, or relative to the working
+/// directory; failing those, the default layout (installed into the config dir if missing).
 #[cfg(feature = "screen")]
 pub fn resolve_layout_path(path: &Path) -> PathBuf {
-    if path.is_absolute() && path.exists() {
-        return path.to_path_buf();
+    let in_config = config_dir().join(path); // an absolute `path` stays as it is
+    if in_config.exists() {
+        return in_config;
     }
     if path.exists() {
         return path.to_path_buf();
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        let from_cwd = cwd.join(path);
-        if from_cwd.exists() {
-            return from_cwd;
-        }
-    }
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/layout.toml");
-    if manifest.exists() {
-        return manifest;
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let from_exe = dir.join(path);
-            if from_exe.exists() {
-                return from_exe;
-            }
-        }
-    }
-    let in_config = config_dir().join(path.file_name().unwrap_or(path.as_os_str()));
-    if in_config.exists() {
-        return in_config;
-    }
-    let bundled = config_dir().join("layout.toml");
-    if bundled.exists() {
-        return bundled;
-    }
-    if let Ok(p) = ensure_layout_file() {
-        return p;
-    }
-    path.to_path_buf()
+    ensure_layout_file().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(feature = "screen")]
@@ -618,5 +572,28 @@ fn edge_point(edge: &str, t: f32) -> (f32, f32) {
         "left" => (0.0, t),
         "bottom" => (t, 1.0),
         _ => (0.5, 0.5),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn example_config_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/runtime.toml");
+        let cfg = super::RuntimeConfig::load(&path).unwrap();
+        assert_eq!((cfg.device.leds, cfg.effect.power, cfg.audio.smoothing), (65, 0.5, 0.15));
+    }
+
+    #[cfg(feature = "screen")]
+    #[test]
+    fn layout_toml_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/layout.toml");
+        let layout = super::LayoutConfig::load(&path).unwrap();
+        assert_eq!(layout.led_count, 65);
+        assert_eq!(layout.origin, "bottom_right");
+        assert_eq!(layout.segments.len(), 3);
+        assert_eq!(layout.edge_zones().len(), 65);
     }
 }
