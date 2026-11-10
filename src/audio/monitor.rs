@@ -10,7 +10,7 @@ use anyhow::Context;
 
 use crate::audio::dynamics::{self, Dynamics};
 use crate::audio::envelope::Envelope;
-use crate::audio::spectrum::analyze_mono;
+use crate::audio::spectrum::{Analyzer, WINDOW_MAX};
 use crate::audio::state::{AudioSnapshot, SPECTRUM_BANDS};
 use crate::config::RuntimeConfig;
 use crate::daemon::DaemonStatus;
@@ -20,8 +20,9 @@ const SAMPLE_RATE: f32 = 48_000.0;
 const READ_CHUNK: usize = 2048;
 const FRAME_BYTES: usize = CHANNELS * std::mem::size_of::<f32>();
 const FRAME_DT: f32 = 1.0 / SAMPLE_RATE;
-const PAREC_LATENCY_MS: &str = "20";
-const PAREC_PROCESS_MS: &str = "5";
+// ~5 ms buffers: PipeWire then runs the graph in 256-sample cycles instead of 1024 (21 ms).
+const PAREC_LATENCY_MS: &str = "5";
+const PAREC_PROCESS_MS: &str = "2";
 // ponytail: ~100Hz one-pole — hats/treble pass less into brightness boost.
 const BASS_LP_ALPHA: f32 = 2.0 * std::f32::consts::PI * 100.0 / SAMPLE_RATE;
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
@@ -166,6 +167,9 @@ struct CaptureState {
     right_env: Envelope,
     lp_mono: f32,
     spec_env: [Envelope; SPECTRUM_BANDS],
+    analyzer: Analyzer,
+    /// Newest signed mono samples, enough for the longest spectrum window.
+    history: Vec<f32>,
     last_spectrum: Instant,
     spectrum: [f32; SPECTRUM_BANDS],
     logged_first_buffer: bool,
@@ -214,6 +218,8 @@ fn run_one_session(
         right_env: Envelope::new(init.attack_ms, init.release_ms),
         lp_mono: 0.0,
         spec_env: std::array::from_fn(|_| Envelope::new(10.0, 120.0)),
+        analyzer: Analyzer::new(SAMPLE_RATE),
+        history: Vec::with_capacity(WINDOW_MAX * 2),
         last_spectrum: Instant::now(),
         spectrum: [0.0; SPECTRUM_BANDS],
         logged_first_buffer: false,
@@ -260,7 +266,9 @@ fn run_one_session(
                     snapshot.store_levels(0.0, 0.0, 0.0, 0.0);
                     idle_since = Instant::now();
                 }
-                thread::sleep(Duration::from_millis(20));
+                // Wake the moment parec writes (not up to 20 ms later); time out to recheck parec.
+                let mut pfd = libc::pollfd { fd: stdout.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+                unsafe { libc::poll(&mut pfd, 1, 100) };
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => return Err(e.into()),
@@ -308,17 +316,17 @@ fn process_chunk(
     for chunk in bytes.chunks_exact(FRAME_BYTES) {
         let l = sample_f32(&chunk[0..4]);
         let r = sample_f32(&chunk[4..8]);
-        l_peak = l_peak.max(l);
-        r_peak = r_peak.max(r);
+        l_peak = l_peak.max(l.abs());
+        r_peak = r_peak.max(r.abs());
         let mono = (l + r) * 0.5;
         mono_buf.push(mono);
 
         state.lp_mono += BASS_LP_ALPHA * (mono - state.lp_mono);
         let bass = state.lp_mono.abs();
 
-        block_l = block_l.max(l);
-        block_r = block_r.max(r);
-        block_mono = block_mono.max(mono);
+        block_l = block_l.max(l.abs());
+        block_r = block_r.max(r.abs());
+        block_mono = block_mono.max(mono.abs());
         block_bass = block_bass.max(bass);
         block_n += 1;
         if block_n >= block_samples {
@@ -368,11 +376,14 @@ fn process_chunk(
         state.right_env.value(),
     );
 
-    let do_spectrum = state.last_spectrum.elapsed() >= Duration::from_millis(100);
-    if do_spectrum && !mono_buf.is_empty() {
+    // Spectrum on every chunk (~5 ms) from a rolling window, not on 5 ms snippets every 100 ms.
+    state.history.extend_from_slice(&mono_buf);
+    let excess = state.history.len().saturating_sub(WINDOW_MAX);
+    state.history.drain(..excess);
+    if !mono_buf.is_empty() {
         let spec_dt = state.last_spectrum.elapsed().as_secs_f32().max(1e-4);
         state.last_spectrum = Instant::now();
-        let bands = analyze_mono(&mono_buf, SAMPLE_RATE);
+        let bands = state.analyzer.analyze(&state.history);
         for (i, &b) in bands.iter().enumerate() {
             state.spec_env[i].tick(b, spec_dt);
             state.spectrum[i] = state.spec_env[i].value();
@@ -382,9 +393,10 @@ fn process_chunk(
 }
 
 fn sample_f32(bytes: &[u8]) -> f32 {
+    // Signed: the bass filter and the spectrum need the waveform, not its absolute value.
     let v = f32::from_le_bytes(bytes.try_into().unwrap());
     if v.is_finite() {
-        v.abs().min(1.0)
+        v.clamp(-1.0, 1.0)
     } else {
         0.0
     }

@@ -16,9 +16,9 @@ pub fn from_sensitivity(sensitivity: f32) -> Dynamics {
     let s = sensitivity.clamp(0.0, 1.0);
     Dynamics {
         drive: lerp(3.5, 7.5, s),
-        attack_ms: lerp(32.0, 8.0, s),
+        attack_ms: lerp(12.0, 4.0, s),
         release_ms: lerp(150.0, 55.0, s),
-        block_samples: lerp(512.0, 192.0, s).round() as usize,
+        block_samples: lerp(256.0, 96.0, s).round() as usize,
         shape_pow: lerp(0.92, 0.78, s),
     }
 }
