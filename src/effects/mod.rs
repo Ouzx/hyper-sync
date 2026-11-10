@@ -18,6 +18,57 @@ use crate::serial::SerialWriter;
 #[cfg(feature = "audio")]
 use crate::audio::{maybe_modulate, AudioSnapshot};
 
+/// Every effect in display order: (id, label, group, ported from Hyperion.ng). The TUI numbers them
+/// by index (Off is 0); the TUI and the tray menu group them by the third field.
+pub const CATALOG: &[(&str, &str, &str, bool)] = &[
+    ("off", "Off", "screen & sound", false),
+    ("screen", "Screen Sync", "screen & sound", false),
+    ("screen_center", "Screen Center", "screen & sound", false),
+    ("sound_viz", "Sound Viz", "screen & sound", false),
+    ("solid", "Solid", "calm", false),
+    ("candle", "Candle", "calm", false),
+    ("fire", "Fire", "calm", false),
+    ("lava", "Lava", "calm", false),
+    ("aurora", "Aurora", "calm", false),
+    ("pulse", "Pulse", "calm", false),
+    ("breath", "Breath", "calm", true),
+    ("cinema_brighten", "Cinema Brighten", "calm", true),
+    ("cinema_dim", "Cinema Dim", "calm", true),
+    ("rainbow_mood", "Rainbow Mood", "calm", true),
+    ("mood_blobs", "Mood Blobs", "calm", true),
+    ("sea_waves", "Sea Waves", "calm", true),
+    ("color_waves", "Waves with Color", "calm", true),
+    ("plasma", "Plasma", "calm", true),
+    ("hyperion_fire", "Fire Animation", "calm", true),
+    ("flow", "Rainbow Flow", "moving", false),
+    ("swirl", "Swirl", "moving", true),
+    ("double_swirl", "Double Swirl", "moving", true),
+    ("wave", "Wave", "moving", false),
+    ("chase", "Chase", "moving", false),
+    ("snake", "Snake", "moving", true),
+    ("scanner", "Scanner", "moving", false),
+    ("knight_rider", "Knight Rider", "moving", true),
+    ("juggler", "Juggler", "moving", true),
+    ("collision", "Collision", "moving", true),
+    ("traces", "Color Traces", "moving", true),
+    ("trails", "Trails", "moving", true),
+    ("police", "Police Lights", "moving", true),
+    ("police_solid", "Police Solid", "moving", true),
+    ("matrix", "Matrix", "moving", true),
+    ("sparkle", "Sparkle", "sparkly", false),
+    ("sparks", "Sparks", "sparkly", true),
+    ("random", "Random", "sparkly", true),
+    ("lightning", "Lightning", "sparkly", false),
+    ("xmas", "X-Mas", "sparkly", true),
+    ("lights", "Lights", "sparkly", true),
+    ("segment", "Segment", "tools", false),
+    ("light_clock", "Light Clock", "tools", true),
+    ("flags", "Flags DE/SE", "tools", true),
+    ("led_test", "LED Test", "tools", true),
+    ("led_test_seq", "LED Test Sequence", "tools", true),
+    ("notify_blue", "Notify Blue", "tools", true),
+];
+
 /// What a renderer gets each frame.
 pub struct Ctx<'a> {
     pub n: usize,

@@ -28,6 +28,11 @@ pub fn runtime_config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
+/// Favorite effect ids, one per line (written by the TUI, read by the tray menu too).
+pub fn favorites_path() -> PathBuf {
+    config_dir().join("favorites")
+}
+
 pub fn ipc_socket_path() -> PathBuf {
     if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
         return PathBuf::from(dir).join("hyper-sync.sock");

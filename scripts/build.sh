@@ -10,6 +10,6 @@ cargo build --release --features "${FEATURES}" "$@"
 cargo install --path . --force --features "${FEATURES}"
 install -Dm755 target/release/hyper-sync "${HOME}/.local/bin/hyper-sync"
 
-if [[ -f assets/hyper-hdr.png ]]; then
-  install -Dm644 assets/hyper-hdr.png "${HOME}/.local/share/icons/hyper-sync/hyper-hdr.png"
-fi
+# App icon for the menu / autostart entries (Icon=hyper-sync); the tray has it built in.
+install -Dm644 assets/hyper-sync.svg "${HOME}/.local/share/icons/hicolor/scalable/apps/hyper-sync.svg"
+install -Dm644 assets/hyper-sync.png "${HOME}/.local/share/icons/hicolor/256x256/apps/hyper-sync.png"

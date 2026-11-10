@@ -191,7 +191,9 @@ Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running.
 
 ### System tray
 
-Right-click: effect submenus (static / ambient / motion / screen), brightness, speed, color, sound, audio boost, sensitivity, FPS, open TUI, quit. Left-click toggles off ↔ last effect. Tooltip shows effect, brightness, and sound/boost when active.
+The icon is the monitor with the strip's glow behind it, greyed while the lights are off. **Click** turns the lights off and back on (to the last effect), **scroll** changes brightness in 5% steps, **middle-click** opens the control panel (TUI).
+
+The right-click menu is built from the live settings: a status line, a *Lights on* checkmark, then **Favorites** (Off plus the TUI's favorites), **Effect** (every effect by group), **Color** (with swatches), and Brightness, Speed, Power, Frame rate, **Sound** (mode, reaction, sensitivity, smoothing) and **Screen sync** (gamma, smoothing, choose another screen). Each submenu shows its current value and marks it inside; changes made in the TUI or `config.toml` show up within a second. Then: open control panel, edit settings file, restart effect, quit.
 
 ## Requirements
 
