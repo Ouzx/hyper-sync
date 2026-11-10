@@ -43,6 +43,9 @@ pub struct DaemonStatus {
     pub leds: String,
     #[serde(default)]
     pub spectrum: Vec<f32>,
+    /// When the daemon started, in Unix seconds.
+    #[serde(default)]
+    pub started: u64,
 }
 
 fn default_reactivity() -> f32 {
@@ -119,6 +122,7 @@ impl DaemonStatus {
             audio_smoothing: cfg.audio.smoothing,
             leds: String::new(),
             spectrum: Vec::new(),
+            started: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         }
     }
 }

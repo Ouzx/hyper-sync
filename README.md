@@ -67,34 +67,56 @@ One process owns the serial port. TUI and tray are thin IPC clients; legacy subc
 
 ### Effect modes
 
+Our own effects:
+
 | Mode | Description |
 |------|-------------|
 | `off` | All LEDs black |
 | `screen` | Screen edge colors (portal + PipeWire) |
 | `screen_center` | Screen sync sampled from center-weighted regions |
+| `sound_viz` | Frequency-band visualization driven by audio |
 | `solid` | Uniform color (hex or `rainbow`) |
 | `candle` | One shared flame flicker with occasional gusts that dip and redden; `warmth` blends the color toward candle amber |
 | `fire` | Red at the bottom, orange toward the top; tongues of flame climb both sides |
 | `lava` | Wax blobs rising up both sides and meeting at the top |
-| `mood` | Five color blobs circling the strip, hues ±30° around the color |
 | `aurora` | Curtains drifting both ways with a shimmer (green → teal → violet with `rainbow`) |
-| `ocean` | Sea waves rolling in from beyond the top-right corner, in ocean blues |
 | `pulse` | Slow breathing, one breath per 3 s |
 | `flow` | Rainbow drifting around the strip, one lap per 8 s |
-| `swirl` | Three arms rotating around the middle of the screen |
-| `plasma` | Overlapping sine fields drifting over the screen |
 | `wave` | Two soft waves rolling around the strip |
 | `chase` | Comet with a fading tail, one lap per 2 s |
-| `scanner` | Back-and-forth highlight |
-| `juggle` | Four dots weaving back and forth, leaving trails |
-| `collision` | Two comets meet at the top and burst |
+| `scanner` | A light running up the right side, across the top and down the left, and back |
 | `sparkle` | Random sparks that fade out |
 | `lightning` | Random strikes with bursts of re-strikes |
 | `segment` | Per-segment blocks (right / top / left) |
-| `clock` | Hour (blue), minute (green) and second (red) hands; 12 o'clock is the middle of the top |
-| `sound_viz` | Frequency-band visualization driven by audio |
 
-Mood blobs, swirl, plasma, ocean (Seawaves), juggle, collision and clock are our own takes on effects that ship with [Hyperion.ng](https://github.com/hyperion-project/hyperion.ng) (MIT). `heartbeat`, `strobe`, `wipe` and `sunrise` were removed; a config naming them loads as pulse, pulse, chase and candle.
+Ports of [Hyperion.ng](https://github.com/hyperion-project/hyperion.ng)'s bundled effects (MIT, see `LICENSES/hyperion.ng.txt`), following each script's maths and timing at speed 1. Hyperion draws on an image and gives each LED the colour of its patch; here each LED samples that image at its spot on the screen edge. Where a script takes a colour, the accent colour is used; `rainbow` picks the script's default or its random/full-colour preset.
+
+| Mode | Hyperion effect(s) |
+|------|-----------|
+| `rainbow_mood` | Rainbow mood: the whole strip on one hue, a minute round the wheel |
+| `mood_blobs` | Red / Green / Blue mood blobs (accent colour); Full color mood blobs (`rainbow`) |
+| `sea_waves` | Sea waves: blue rings from beyond the top-right corner, one cycle a minute |
+| `color_waves` | Waves with Color: rainbow rings from the top-left, 90 s a cycle |
+| `plasma` | Plasma (Hyperion advanced it by its CPU time, which varies; here 13 s a cycle) |
+| `swirl` | Rainbow swirl (`rainbow`, 20 s a turn; "fast" = speed 2.9); Atomic swirl's three arms in the accent colour |
+| `double_swirl` | Double swirl |
+| `snake` | Snake (accent colour; red with `rainbow`) |
+| `knight_rider` | Knight rider: sweeps across the screen width, so each side lights all at once at the ends |
+| `juggler` | Juggler |
+| `collision` | Collision (including its quirk of rotating the output by bytes, which shifts colours) |
+| `traces` | Color traces |
+| `trails` | Trails (accent colour) / Trails color (`rainbow`); drops fall down image columns, so on an edge strip they show only now and then |
+| `police` / `police_solid` | Police Lights Single / Solid |
+| `sparks` | Sparks (accent colour; random colours with `rainbow`) |
+| `random` | Random |
+| `xmas` | X-Mas |
+| `light_clock` | Light clock: hour, minute and second as wedges fading out behind each hand |
+| `flags` | Flags Germany/Sweden |
+| `led_test` / `led_test_seq` | Led Test / Led Test - Sequence (pair with the LED numbers in the TUI) |
+
+Not ported: **Pac-Man** (a trademarked game character), **Strobe red/white** (strobes were removed on request), **System Shutdown** (a one-off alarm that can halt the machine), **Cinema brighten/dim lights** (one-off fades), **Notify blue** (`ctl flash 0000ff` does this), **Breath** (≈ `pulse`), **Candle** (ours is one shared flame; Hyperion's flickers every LED on its own, which reads as a flat glow from a distance), **Warm/Cold mood blobs** (base hue wandering in a range; use a red or blue accent), and **Fire / Lights / Matrix**, which play GIF animations that would have to be bundled.
+
+`heartbeat`, `strobe`, `wipe` and `sunrise` were removed, and some effects were renamed (`mood` → `mood_blobs`, `ocean` → `sea_waves`, `juggle` → `juggler`, `clock` → `light_clock`); a config with an old name still loads.
 
 Shared controls: **brightness**, **speed**, **power** (how strongly effects dim, flicker and contrast: 0 = steady, 50% = as designed, 100% = twice that), **FPS** (24/30/45/55), **color** presets + rainbow.
 
@@ -119,7 +141,7 @@ Works on top of any effect (not just `sound_viz`):
 
 | Setting | Description |
 |---------|-------------|
-| **Sound mode** | `off` · `level` (whole strip) · `balance` (pan-weighted zones) |
+| **Sound mode** | `level`: the whole strip follows the music (bass) · `balance`: each side follows its own channel (left speaker → left side, right → right) and the top the mix, with the stereo difference tripled. With centred audio the two look alike; balance shows with panned sound (games, films, wide-stereo music). |
 | **Reaction** (`reactivity`) | How strongly the lights follow the music: quiet passages dim to as low as 30% of your brightness, peaks lift toward 100% |
 | **Sensitivity** | Input drive and shaping (how strongly quiet sounds register) |
 | **Smoothing** (`[audio] smoothing`) | How slowly the reaction falls back: 0 = snappy (50 ms), 1 = smooth (600 ms) |
@@ -138,12 +160,15 @@ Requires `parec` (PipeWire) on `PATH`.
 
 Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running. Fits 80×24; **`?`** lists every key.
 
-**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, every 5th LED numbered, with the effect, frame rate and connection status inside; in screen sync it shades the part of the screen being sampled) · controls with their keys (left) · numbered effects (right). Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
+**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, every 5th LED numbered, with the effect, frame rate and connection status inside; in screen sync it shades the part of the screen being sampled) · controls with their keys (left) · effects (right): favorites pinned on top, then every effect under its group; `H` marks Hyperion ports. On tall terminals a stats & config panel sits under the controls: frame rate, uptime, an estimate of the LED current (20 mA per channel at full; green under 0.5 A, red from 0.9 A — what a USB 2 / 3 port supplies), strip, screen and config file. Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓`, `Enter` | Browse effects — the one under the cursor starts when you pause; `Enter` starts it now |
-| `1`–`24` | Jump to an effect by number |
+| `1`–`39` | Jump to an effect by number |
+| `f` | Favorite: start the effect and pin it in a section at the top of the list (again: unpin). Saved in `~/.config/hyper-sync/favorites` |
+| `i` | Stats & config panel (always shown under the controls when the terminal has 31+ rows) |
+| `e` | Edit `config.toml` in `$VISUAL`/`$EDITOR` (or the desktop's editor); changes apply live |
 | `w` / `s` | Brightness up / down |
 | `a` / `d` | Speed down / up |
 | `z` / `x` | Power down / up |

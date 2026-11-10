@@ -19,32 +19,48 @@ use crate::daemon::{daemon_running, ipc_request, DaemonStatus, IpcRequest, Patch
 use crate::effects::solid::{hsv_to_rgb, is_rainbow_color, parse_color, rgb_to_hex, rgb_to_hsv};
 use crate::layout::segment_bounds;
 
-/// Effects in display order (screen, static, ambient, motion) with their labels.
-const MODES: &[(&str, &str)] = &[
-    ("off", "Off"),
-    ("screen", "Screen Sync"),
-    ("screen_center", "Screen Center"),
-    ("sound_viz", "Sound Viz"),
-    ("solid", "Solid"),
-    ("candle", "Candle"),
-    ("fire", "Fire"),
-    ("lava", "Lava"),
-    ("mood", "Mood Blobs"),
-    ("aurora", "Aurora"),
-    ("ocean", "Ocean"),
-    ("pulse", "Pulse"),
-    ("flow", "Rainbow Flow"),
-    ("swirl", "Swirl"),
-    ("plasma", "Plasma"),
-    ("wave", "Wave"),
-    ("chase", "Chase"),
-    ("scanner", "Scanner"),
-    ("juggle", "Juggle"),
-    ("collision", "Collision"),
-    ("sparkle", "Sparkle"),
-    ("lightning", "Lightning"),
-    ("segment", "Segment"),
-    ("clock", "Clock"),
+/// Effects in display order: (id, label, group, ported from Hyperion.ng). Groups become headers
+/// in the effects panel; the number keys follow this order.
+const MODES: &[(&str, &str, &str, bool)] = &[
+    ("off", "Off", "screen & sound", false),
+    ("screen", "Screen Sync", "screen & sound", false),
+    ("screen_center", "Screen Center", "screen & sound", false),
+    ("sound_viz", "Sound Viz", "screen & sound", false),
+    ("solid", "Solid", "calm", false),
+    ("candle", "Candle", "calm", false),
+    ("fire", "Fire", "calm", false),
+    ("lava", "Lava", "calm", false),
+    ("aurora", "Aurora", "calm", false),
+    ("pulse", "Pulse", "calm", false),
+    ("rainbow_mood", "Rainbow Mood", "calm", true),
+    ("mood_blobs", "Mood Blobs", "calm", true),
+    ("sea_waves", "Sea Waves", "calm", true),
+    ("color_waves", "Waves with Color", "calm", true),
+    ("plasma", "Plasma", "calm", true),
+    ("flow", "Rainbow Flow", "moving", false),
+    ("swirl", "Swirl", "moving", true),
+    ("double_swirl", "Double Swirl", "moving", true),
+    ("wave", "Wave", "moving", false),
+    ("chase", "Chase", "moving", false),
+    ("snake", "Snake", "moving", true),
+    ("scanner", "Scanner", "moving", false),
+    ("knight_rider", "Knight Rider", "moving", true),
+    ("juggler", "Juggler", "moving", true),
+    ("collision", "Collision", "moving", true),
+    ("traces", "Color Traces", "moving", true),
+    ("trails", "Trails", "moving", true),
+    ("police", "Police Lights", "moving", true),
+    ("police_solid", "Police Solid", "moving", true),
+    ("sparkle", "Sparkle", "sparkly", false),
+    ("sparks", "Sparks", "sparkly", true),
+    ("random", "Random", "sparkly", true),
+    ("lightning", "Lightning", "sparkly", false),
+    ("xmas", "X-Mas", "sparkly", true),
+    ("segment", "Segment", "tools", false),
+    ("light_clock", "Light Clock", "tools", true),
+    ("flags", "Flags DE/SE", "tools", true),
+    ("led_test", "LED Test", "tools", true),
+    ("led_test_seq", "LED Test Sequence", "tools", true),
 ];
 const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
@@ -80,10 +96,22 @@ struct UiState {
     custom_hex: String,
     color_dial: Option<ColorDial>,
     help: bool,
+    /// Stats & config in place of the controls (small terminals; tall ones show both).
+    info: bool,
+    /// Position in the effects panel: favorites first, then every effect.
     cursor: usize,
+    favorites: Vec<usize>,
+    /// First visible line of the favorites and of the full list (kept between frames so the
+    /// lists don't jump).
+    scroll: [std::cell::Cell<usize>; 2],
     browse_since: Option<Instant>,
     digits: String,
     digits_since: Instant,
+    /// The config file as last read (port, monitor, layout for the info panel).
+    cfg: Option<crate::config::RuntimeConfig>,
+    /// Estimated LED current now and the highest seen this session, in amps.
+    amps: f32,
+    peak_amps: f32,
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -135,13 +163,19 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
         custom_hex: DEFAULT_CUSTOM_HEX.into(),
         color_dial: None,
         help: false,
+        info: false,
         cursor: 0,
+        favorites: load_favorites(),
+        scroll: Default::default(),
         browse_since: None,
         digits: String::new(),
         digits_since: Instant::now(),
+        cfg: crate::config::RuntimeConfig::load(&crate::config::runtime_config_path()).ok(),
+        amps: 0.0,
+        peak_amps: 0.0,
     };
     poll_status(&mut state);
-    state.cursor = mode_index(&state.st.effect).unwrap_or(0);
+    state.cursor = state.favorites.len() + mode_index(&state.st.effect).unwrap_or(0);
     let mut last_poll = Instant::now();
 
     while !quit.load(Ordering::Relaxed) {
@@ -151,14 +185,18 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
         // One key per redraw, so a held key shows every step instead of freezing the screen.
         if event::poll(POLL.saturating_sub(last_poll.elapsed()))? {
             if let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
-                if kind != KeyEventKind::Release && handle_key(&mut state, code, modifiers) {
+                let overlay = state.help || state.color_dial.is_some();
+                if kind != KeyEventKind::Release && code == KeyCode::Char('e') && !overlay {
+                    edit_config(&mut terminal)?;
+                    state.cfg = crate::config::RuntimeConfig::load(&crate::config::runtime_config_path()).ok();
+                } else if kind != KeyEventKind::Release && handle_key(&mut state, code, modifiers) {
                     return Ok(());
                 }
             }
         }
         if state.browse_since.is_some_and(|t| t.elapsed() >= BROWSE_SETTLE) {
             state.browse_since = None;
-            let idx = state.cursor;
+            let idx = cursor_mode(&state);
             select_mode(&mut state, idx);
         }
         if !state.digits.is_empty() && state.digits_since.elapsed() >= DIGIT_WAIT {
@@ -198,13 +236,28 @@ fn handle_key(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> bo
         KeyCode::Char('?') => state.help = true,
         KeyCode::Up | KeyCode::Down => {
             let dir = if code == KeyCode::Up { -1 } else { 1 };
-            state.cursor = (state.cursor as i32 + dir).rem_euclid(MODES.len() as i32) as usize;
+            let len = state.favorites.len() + MODES.len();
+            state.cursor = (state.cursor as i32 + dir).rem_euclid(len as i32) as usize;
             state.browse_since = Some(Instant::now());
         }
         KeyCode::Enter => {
-            let idx = state.cursor;
+            let idx = cursor_mode(state);
             select_mode(state, idx);
         }
+        // Favorite: pin the effect under the cursor to the top and start it; again to unpin.
+        KeyCode::Char('f' | 'F') => {
+            let idx = cursor_mode(state);
+            if let Some(k) = state.favorites.iter().position(|&f| f == idx) {
+                state.favorites.remove(k);
+            } else {
+                state.favorites.push(idx);
+                select_mode(state, idx);
+            }
+            state.cursor = state.favorites.len() + idx;
+            state.browse_since = None;
+            save_favorites(&state.favorites);
+        }
+        KeyCode::Char('i' | 'I') => state.info = !state.info,
         KeyCode::Char(c) if c.is_ascii_digit() => {
             state.digits.push(c);
             state.digits_since = Instant::now();
@@ -298,8 +351,14 @@ fn update_status(state: &mut UiState, status: Option<DaemonStatus>) {
         st.color = std::mem::take(&mut state.st.color);
     }
     if state.st.effect != st.effect && state.browse_since.is_none() {
-        state.cursor = mode_index(&st.effect).unwrap_or(state.cursor);
+        if let Some(i) = mode_index(&st.effect) {
+            state.cursor = state.favorites.len() + i;
+        }
     }
+    // 20 mA per channel at full is the usual WS2812-style figure; an estimate, not a measurement.
+    let leds = st.leds.as_bytes().chunks(2).filter_map(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok());
+    state.amps = leds.map(|v| f32::from(v) / 255.0 * 0.02).sum();
+    state.peak_amps = state.peak_amps.max(state.amps);
     state.st = st;
     state.connected = true;
     if state.color_dial.is_none() {
@@ -313,23 +372,62 @@ fn update_status(state: &mut UiState, status: Option<DaemonStatus>) {
 }
 
 fn select_mode(state: &mut UiState, idx: usize) {
-    state.cursor = idx;
     state.browse_since = None;
     if MODES[idx].0 != state.st.effect {
+        // Set it first, so the reply doesn't move the cursor out of the favorites.
+        state.st.effect = MODES[idx].0.into();
         send(state, Patch { mode: Some(MODES[idx].0.into()), ..Default::default() });
     }
+}
+
+/// The effect (index into MODES) under the cursor.
+fn cursor_mode(state: &UiState) -> usize {
+    state.favorites.get(state.cursor).copied().unwrap_or(state.cursor.saturating_sub(state.favorites.len()).min(MODES.len() - 1))
+}
+
+fn favorites_path() -> std::path::PathBuf {
+    crate::config::config_dir().join("favorites")
+}
+
+fn load_favorites() -> Vec<usize> {
+    std::fs::read_to_string(favorites_path()).unwrap_or_default().lines().filter_map(|l| mode_index(l.trim())).collect()
+}
+
+fn save_favorites(favorites: &[usize]) {
+    let text: String = favorites.iter().map(|&i| format!("{}\n", MODES[i].0)).collect();
+    let _ = std::fs::write(favorites_path(), text);
+}
+
+/// Open config.toml in $VISUAL/$EDITOR (the TUI steps aside meanwhile), or the desktop's editor.
+/// The daemon applies the saved file live.
+fn edit_config(terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>) -> anyhow::Result<()> {
+    let path = crate::config::runtime_config_path();
+    let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default();
+    let mut words = editor.split_whitespace();
+    if let Some(program) = words.next() {
+        stdout().execute(LeaveAlternateScreen)?;
+        disable_raw_mode()?;
+        let _ = std::process::Command::new(program).args(words).arg(&path).status();
+        enable_raw_mode()?;
+        stdout().execute(EnterAlternateScreen)?;
+        terminal.clear()?;
+    } else {
+        let _ = std::process::Command::new("xdg-open").arg(&path).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    }
+    Ok(())
 }
 
 fn apply_digits(state: &mut UiState) {
     let pick = state.digits.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
     state.digits.clear();
     if let Some(idx) = pick.filter(|&i| i < MODES.len()) {
+        state.cursor = state.favorites.len() + idx;
         select_mode(state, idx);
     }
 }
 
 fn mode_index(mode: &str) -> Option<usize> {
-    MODES.iter().position(|(m, _)| *m == mode)
+    MODES.iter().position(|m| m.0 == mode)
 }
 
 fn fps_index(fps: u32) -> usize {
@@ -345,15 +443,20 @@ fn is_screen_sync(mode: &str) -> bool {
 }
 
 fn uses_speed(effect: &str) -> bool {
-    !matches!(effect, "off" | "solid" | "sound_viz" | "clock") && !is_screen_sync(effect)
+    !matches!(effect, "off" | "solid" | "sound_viz" | "light_clock") && !is_screen_sync(effect)
 }
 
+/// Power only shapes our own effects; the Hyperion ports stay as their scripts draw them.
 fn uses_power(effect: &str) -> bool {
-    uses_speed(effect) && effect != "flow"
+    matches!(effect, "candle" | "fire" | "lava" | "aurora" | "pulse" | "wave" | "chase" | "scanner" | "sparkle" | "lightning" | "segment")
 }
 
 fn uses_accent_color(effect: &str) -> bool {
-    !matches!(effect, "off" | "fire" | "flow" | "ocean" | "clock") && !is_screen_sync(effect)
+    matches!(
+        effect,
+        "solid" | "candle" | "lava" | "aurora" | "pulse" | "wave" | "chase" | "scanner" | "sparkle" | "lightning" | "segment" | "sound_viz"
+            | "mood_blobs" | "swirl" | "snake" | "knight_rider" | "sparks" | "trails"
+    )
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {
@@ -460,15 +563,27 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
     let w = body.width.min(110);
     let body = Rect { x: body.x + (body.width - w) / 2, width: w, ..body };
     let footer = Rect { x: body.x, width: w, ..footer };
-    let [controls, effects] = Layout::default()
+    let [left, effects] = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(44), Constraint::Length(36)])
         .areas(body);
+    // Tall terminals get stats & config under the controls; otherwise `i` swaps them in.
+    let [controls, info] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(if left.height >= 14 + 7 { [Constraint::Length(14), Constraint::Min(0)] } else { [Constraint::Min(0), Constraint::Length(0)] })
+        .areas(left);
 
     if preview_rows > 0 {
         draw_preview(f, preview, state);
     }
-    draw_controls(f, controls, state);
+    if info.height > 0 {
+        draw_controls(f, controls, state);
+        draw_info(f, info, state);
+    } else if state.info {
+        draw_info(f, controls, state);
+    } else {
+        draw_controls(f, controls, state);
+    }
     draw_effects(f, effects, state);
     draw_footer(f, footer, state);
     if state.help {
@@ -720,6 +835,7 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" controls ")), area);
 }
 
+/// Favorites on top, then every effect under its group header; scrolls to keep the cursor in view.
 fn draw_effects(f: &mut Frame, area: Rect, state: &UiState) {
     let title = if state.digits.is_empty() { " effects ".to_string() } else { format!(" effects → {}_ ", state.digits) };
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -728,13 +844,9 @@ fn draw_effects(f: &mut Frame, area: Rect, state: &UiState) {
     if inner.height == 0 {
         return;
     }
-    let rows = inner.height as usize;
-    let cols = MODES.len().div_ceil(rows);
-    let col_w = inner.width / cols as u16;
-    for (i, (mode, label)) in MODES.iter().enumerate() {
-        let (col, r) = (i / rows, i % rows);
-        let active = *mode == state.st.effect;
-        let cursor = i == state.cursor;
+    let entry = |pos: usize, idx: usize| -> Line<'static> {
+        let (mode, label, _, hyperion) = MODES[idx];
+        let (active, cursor) = (mode == state.st.effect, pos == state.cursor);
         let style = if active {
             Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else if cursor {
@@ -742,14 +854,101 @@ fn draw_effects(f: &mut Frame, area: Rect, state: &UiState) {
         } else {
             Style::new()
         };
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(if cursor { "▶" } else { " " }, Style::new().fg(Color::Cyan)),
-            Span::styled(format!("{:>2} ", i + 1), DIM),
-            Span::styled(*label, style),
-        ]);
-        let cell = Rect { x: inner.x + col as u16 * col_w, y: inner.y + r as u16, width: col_w, height: 1 };
-        f.render_widget(Paragraph::new(line), cell);
+            Span::styled(format!("{:>2} ", idx + 1), DIM),
+            Span::styled(label, style),
+        ];
+        if hyperion {
+            spans.push(Span::styled(" H", DIM));
+        }
+        if pos >= state.favorites.len() && state.favorites.contains(&idx) {
+            spans.push(Span::styled(" ★", Style::new().fg(Color::Yellow)));
+        }
+        Line::from(spans)
+    };
+    // Favorites stay pinned on top (up to half the panel); the full list scrolls below them.
+    let mut favs = Vec::new();
+    let mut fav_cursor = None;
+    if !state.favorites.is_empty() {
+        favs.push(Line::styled("★ favorites", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+        for (pos, &idx) in state.favorites.iter().enumerate() {
+            if pos == state.cursor {
+                fav_cursor = Some(favs.len());
+            }
+            favs.push(entry(pos, idx));
+        }
     }
+    let mut all = Vec::new();
+    let mut all_cursor = None;
+    let mut group = "";
+    for (idx, m) in MODES.iter().enumerate() {
+        if m.2 != group {
+            group = m.2;
+            all.push(Line::styled(format!("─ {group}"), DIM.add_modifier(Modifier::BOLD)));
+        }
+        let pos = state.favorites.len() + idx;
+        if pos == state.cursor {
+            all_cursor = Some(all.len());
+        }
+        all.push(entry(pos, idx));
+    }
+    let fav_rows = favs.len().min(inner.height as usize / 2) as u16;
+    let [fav_area, all_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(fav_rows), Constraint::Min(0)])
+        .areas(inner);
+    // Keep the cursor (and the line above it) in view without jumping on every move.
+    let mut show = |lines: Vec<Line<'static>>, cursor: Option<usize>, area: Rect, scroll: &std::cell::Cell<usize>| {
+        let rows = area.height as usize;
+        let mut top = scroll.get();
+        if let Some(line) = cursor {
+            if line < top + 1 {
+                top = line.saturating_sub(1);
+            }
+            if line + 1 > top + rows {
+                top = line + 1 - rows;
+            }
+        }
+        top = top.min(lines.len().saturating_sub(rows));
+        scroll.set(top);
+        f.render_widget(Paragraph::new(lines).scroll((top as u16, 0)), area);
+    };
+    show(favs, fav_cursor, fav_area, &state.scroll[0]);
+    show(all, all_cursor, all_area, &state.scroll[1]);
+}
+
+/// Stats from the daemon and the config file at a glance.
+fn draw_info(f: &mut Frame, area: Rect, state: &UiState) {
+    let st = &state.st;
+    let line = |label: &str, mut value: Vec<Span<'static>>| {
+        let mut spans = vec![Span::styled(format!("{label:<8}"), DIM)];
+        spans.append(&mut value);
+        Line::from(spans)
+    };
+    let amp_style = |a: f32| Style::new().fg(if a < 0.5 { Color::Green } else if a < 0.9 { Color::Yellow } else { Color::Red });
+    let up = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()).saturating_sub(st.started);
+    let uptime = if st.started == 0 { "?".into() } else if up >= 3600 { format!("{}h {}m", up / 3600, up / 60 % 60) } else { format!("{}m {}s", up / 60, up % 60) };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = crate::config::runtime_config_path().display().to_string();
+    let path = if !home.is_empty() && path.starts_with(&home) { format!("~{}", &path[home.len()..]) } else { path };
+    let mut lines = vec![
+        line("daemon", vec![Span::raw(format!("{:.0}/{} fps · up {uptime}", st.actual_fps, st.fps))]),
+        line("current", vec![
+            Span::styled(format!("≈{:.2} A", state.amps), amp_style(state.amps)),
+            Span::raw(" now · "),
+            Span::styled(format!("{:.2} A", state.peak_amps), amp_style(state.peak_amps)),
+            Span::styled(" peak (est.)", DIM),
+        ]),
+    ];
+    if let Some(cfg) = &state.cfg {
+        let [(_, r1), (t0, t1), (l0, l1)] = segment_bounds(usize::from(cfg.device.leds));
+        lines.push(line("strip", vec![Span::raw(format!("{} LEDs ({}/{}/{}) · {}", cfg.device.leds, r1, t1 - t0, l1 - l0, cfg.device.port))]));
+        #[cfg(feature = "screen")]
+        lines.push(line("screen", vec![Span::raw(format!("monitor {} · {}", cfg.screen.monitor, cfg.screen.layout))]));
+    }
+    lines.push(line("config", vec![Span::raw(path), Span::styled("  e edit", DIM)]));
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" stats & config ")), area);
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, state: &UiState) {
@@ -758,7 +957,7 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &UiState) {
     } else if state.browse_since.is_some() {
         "↑/↓ browse · Enter start now · starts when you pause"
     } else {
-        "? help · ↑/↓ or number: effect · q quit"
+        "? help · ↑/↓ or number: effect · f favorite · i info · q quit"
     };
     f.render_widget(Paragraph::new(Span::styled(hint, DIM)), area);
 }
@@ -773,7 +972,8 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 fn draw_help(f: &mut Frame) {
     const KEYS: &[(&str, &str)] = &[
         ("↑/↓, Enter", "browse; starts when you pause (Enter: now)"),
-        ("1–24", "jump to an effect by number"),
+        ("1–39", "jump to an effect by number"),
+        ("f", "favorite: start it and pin it to the top (again: unpin)"),
         ("w/s", "brightness"),
         ("a/d", "speed (animated effects)"),
         ("z/x", "power: how strongly effects dim, flicker, contrast"),
@@ -785,6 +985,8 @@ fn draw_help(f: &mut Frame) {
         ("j/k", "sound reaction: dims on quiet, lifts on beats"),
         ("h/l", "sound sensitivity"),
         (", / .", "sound smoothing: how slowly it falls back"),
+        ("i", "stats & config (always shown on tall terminals)"),
+        ("e", "edit config.toml in $EDITOR (applies live)"),
         ("R", "pick another screen to capture"),
         ("Ctrl+R", "restart the current effect"),
         ("q, Esc", "quit (the daemon keeps running)"),

@@ -43,7 +43,7 @@ pub fn ipc_socket_path() -> PathBuf {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum EffectMode {
     Off,
     Solid,
@@ -64,17 +64,35 @@ pub enum EffectMode {
     Flow,
     Lava,
     Lightning,
-    Mood,
+    // Ports of Hyperion.ng's effects (effects/hyperion.rs).
+    #[serde(alias = "mood")]
+    MoodBlobs,
     Swirl,
+    DoubleSwirl,
     Plasma,
-    Ocean,
-    Juggle,
+    #[serde(alias = "ocean")]
+    SeaWaves,
+    ColorWaves,
+    #[serde(alias = "juggle")]
+    Juggler,
     Collision,
-    Clock,
-    #[serde(rename = "sound_viz")]
+    #[serde(alias = "clock")]
+    LightClock,
+    Traces,
+    Flags,
+    KnightRider,
+    LedTest,
+    LedTestSeq,
+    Police,
+    PoliceSolid,
+    RainbowMood,
+    Random,
+    Snake,
+    Sparks,
+    Trails,
+    Xmas,
     SoundViz,
     Screen,
-    #[serde(rename = "screen_center")]
     ScreenCenter,
 }
 
@@ -96,13 +114,28 @@ impl EffectMode {
             Self::Flow => "flow",
             Self::Lava => "lava",
             Self::Lightning => "lightning",
-            Self::Mood => "mood",
+            Self::MoodBlobs => "mood_blobs",
             Self::Swirl => "swirl",
+            Self::DoubleSwirl => "double_swirl",
             Self::Plasma => "plasma",
-            Self::Ocean => "ocean",
-            Self::Juggle => "juggle",
+            Self::SeaWaves => "sea_waves",
+            Self::ColorWaves => "color_waves",
+            Self::Juggler => "juggler",
             Self::Collision => "collision",
-            Self::Clock => "clock",
+            Self::LightClock => "light_clock",
+            Self::Traces => "traces",
+            Self::Flags => "flags",
+            Self::KnightRider => "knight_rider",
+            Self::LedTest => "led_test",
+            Self::LedTestSeq => "led_test_seq",
+            Self::Police => "police",
+            Self::PoliceSolid => "police_solid",
+            Self::RainbowMood => "rainbow_mood",
+            Self::Random => "random",
+            Self::Snake => "snake",
+            Self::Sparks => "sparks",
+            Self::Trails => "trails",
+            Self::Xmas => "xmas",
             Self::SoundViz => "sound_viz",
             Self::Screen => "screen",
             Self::ScreenCenter => "screen_center",

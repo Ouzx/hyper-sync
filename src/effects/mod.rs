@@ -1,5 +1,6 @@
 pub mod animated;
 pub mod candle;
+pub mod hyperion;
 pub mod solid;
 pub mod sound_viz;
 
@@ -26,8 +27,11 @@ pub struct Ctx<'a> {
     pub dt: f32,
     pub frame: u32,
     pub cfg: &'a RuntimeConfig,
-    /// Per-LED memory kept between frames, 3 floats per LED; zeroed when the effect starts.
-    pub mem: &'a mut [f32],
+    /// Memory kept between frames (3 floats per LED to start; effects may grow it); zeroed when
+    /// the effect starts.
+    pub mem: &'a mut Vec<f32>,
+    /// Random seed for this run, so "random" effects differ each time they start.
+    pub seed: u32,
     #[cfg(feature = "audio")]
     pub audio: &'a AudioSnapshot,
 }
@@ -43,6 +47,7 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let n = usize::from(config.read().unwrap().device.leds);
     let mut mem = vec![0.0f32; n * 3];
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos());
     let mut fps_meter = FpsMeter::new();
     let (mut t, mut frame) = (0.0f32, 0u32);
     let mut last = Instant::now();
@@ -77,6 +82,7 @@ pub fn run(
                 frame,
                 cfg: &cfg,
                 mem: &mut mem,
+                seed,
                 #[cfg(feature = "audio")]
                 audio: &audio,
             },
@@ -123,6 +129,28 @@ fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
         EffectMode::Solid | EffectMode::Rainbow => solid::render(c),
         EffectMode::Candle => candle::render(c),
         EffectMode::SoundViz => sound_viz::render(c),
+        EffectMode::MoodBlobs
+        | EffectMode::Swirl
+        | EffectMode::DoubleSwirl
+        | EffectMode::Plasma
+        | EffectMode::SeaWaves
+        | EffectMode::ColorWaves
+        | EffectMode::Juggler
+        | EffectMode::Collision
+        | EffectMode::LightClock
+        | EffectMode::Traces
+        | EffectMode::Flags
+        | EffectMode::KnightRider
+        | EffectMode::LedTest
+        | EffectMode::LedTestSeq
+        | EffectMode::Police
+        | EffectMode::PoliceSolid
+        | EffectMode::RainbowMood
+        | EffectMode::Random
+        | EffectMode::Snake
+        | EffectMode::Sparks
+        | EffectMode::Trails
+        | EffectMode::Xmas => hyperion::render(mode, c),
         _ => animated::render(mode, c),
     }
 }

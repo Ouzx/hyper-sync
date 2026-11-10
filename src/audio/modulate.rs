@@ -22,22 +22,19 @@ pub fn modulate_rgb(
             let gain = brightness_gain(base_brightness, react, sensitivity, snap.bass_level());
             apply_gain(rgb, gain);
         }
+        // Each side follows its own channel, the top the mix. Most music sits near the middle, so
+        // the stereo difference is tripled — otherwise balance looked just like level.
         SoundMode::Balance => {
-            let l = snap.left();
-            let r = snap.right();
-            let sum = l + r + 1e-6;
-            let side = (r - l) / sum;
-            let right_w = (0.5 + side).clamp(0.0, 1.0);
-            let left_w = (0.5 - side).clamp(0.0, 1.0);
-            let center_w = (1.0 - side.abs()).clamp(0.0, 1.0);
+            let (l, r) = (snap.left(), snap.right());
+            let side = ((r - l) / (l + r + 1e-6) * 3.0).clamp(-1.0, 1.0);
             let level = snap.bass_level();
             for i in 0..n {
                 let pan = match led_zone(i, n) {
-                    LedZone::Right => right_w,
-                    LedZone::Top => center_w,
-                    LedZone::Left => left_w,
+                    LedZone::Right => 1.0 + side,
+                    LedZone::Top => 1.0,
+                    LedZone::Left => 1.0 - side,
                 };
-                let audio = (level * (0.35 + 0.65 * pan)).clamp(0.0, 1.0);
+                let audio = (level * pan).clamp(0.0, 1.0);
                 let gain = brightness_gain(base_brightness, react, sensitivity, audio);
                 scale_pixel(rgb, i, gain);
             }
@@ -80,7 +77,22 @@ fn scale_pixel(rgb: &mut [u8], i: usize, gain: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::brightness_gain;
+    use super::*;
+
+    #[test]
+    fn balance_lights_the_side_the_sound_comes_from() {
+        let snap = AudioSnapshot::new();
+        // Mostly left: left 0.6, right 0.3 (bass 0.8).
+        snap.store_levels(0.5, 0.8, 0.6, 0.3);
+        let mut rgb = vec![100u8; 65 * 3];
+        modulate_rgb(&mut rgb, 65, 0.5, SoundMode::Balance, 1.0, 0.5, &snap);
+        let (right, top, left) = (rgb[0], rgb[30 * 3], rgb[64 * 3]);
+        assert!(left > top && top > right, "left {left}, top {top}, right {right}");
+        // Level mode treats every LED the same.
+        let mut flat = vec![100u8; 65 * 3];
+        modulate_rgb(&mut flat, 65, 0.5, SoundMode::Level, 1.0, 0.5, &snap);
+        assert_eq!(flat[0], flat[64 * 3]);
+    }
 
     #[test]
     fn boost_scales_to_full_brightness() {
