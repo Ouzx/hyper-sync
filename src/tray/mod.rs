@@ -10,7 +10,7 @@ use ksni::menu::{MenuItem, StandardItem, SubMenu};
 use ksni::{Icon, ToolTip, Tray};
 
 use crate::config::RuntimeConfig;
-use crate::daemon::{ipc_request, IpcRequest};
+use crate::daemon::{ipc_request, IpcRequest, Patch};
 
 pub fn run(_config: std::sync::Arc<std::sync::RwLock<RuntimeConfig>>) -> anyhow::Result<()> {
     let icons = load_icons()?;
@@ -213,28 +213,16 @@ impl Tray for HyperTray {
             .unwrap_or_else(|| "off".into());
         if current == "off" {
             let last = self.last_mode.lock().unwrap().clone();
-            ipc_async(IpcRequest::Patch {
+            ipc_async(IpcRequest::Patch(Patch {
                 mode: Some(last),
-                brightness: None,
-                color: None,
-                fps: None,
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         } else {
             *self.last_mode.lock().unwrap() = current;
-            ipc_async(IpcRequest::Patch {
+            ipc_async(IpcRequest::Patch(Patch {
                 mode: Some("off".into()),
-                brightness: None,
-                color: None,
-                fps: None,
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }
     }
 
@@ -263,16 +251,10 @@ fn patch_item(label: &str, mode: &str) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
+            ipc_async(IpcRequest::Patch(Patch {
                 mode: Some(mode.clone()),
-                brightness: None,
-                color: None,
-                fps: None,
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -283,16 +265,10 @@ fn sound_mode_item(label: &str, mode: &str) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
-                brightness: None,
-                color: None,
-                fps: None,
-                speed: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 sound_mode: Some(mode.clone()),
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -302,16 +278,10 @@ fn brightness_item(label: &str, value: f32) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 brightness: Some(value),
-                color: None,
-                fps: None,
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -322,16 +292,10 @@ fn color_item(label: &str, color: &str) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
-                brightness: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 color: Some(color.clone()),
-                fps: None,
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -341,16 +305,10 @@ fn reactivity_item(label: &str, value: f32) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
-                brightness: None,
-                color: None,
-                fps: None,
-                speed: None,
-                sound_mode: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 reactivity: Some(value),
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -360,16 +318,10 @@ fn sensitivity_item(label: &str, value: f32) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
-                brightness: None,
-                color: None,
-                fps: None,
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 sensitivity: Some(value),
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -379,16 +331,10 @@ fn fps_item(label: &str, fps: u32) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
-                brightness: None,
-                color: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 fps: Some(fps),
-                speed: None,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })
@@ -398,16 +344,10 @@ fn speed_item(label: &str, speed: f32) -> MenuItem<HyperTray> {
     MenuItem::Standard(StandardItem {
         label: label.into(),
         activate: Box::new(move |_| {
-            ipc_async(IpcRequest::Patch {
-                mode: None,
-                brightness: None,
-                color: None,
-                fps: None,
+            ipc_async(IpcRequest::Patch(Patch {
                 speed: Some(speed),
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            });
+                ..Default::default()
+            }));
         }),
         ..Default::default()
     })

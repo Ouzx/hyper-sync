@@ -30,16 +30,22 @@ pub enum IpcRequest {
     /// Blink a color over whatever is running (notifications, build results).
     Flash { color: String, count: u32 },
     Set { config: RuntimeConfig },
-    Patch {
-        mode: Option<String>,
-        brightness: Option<f32>,
-        color: Option<String>,
-        fps: Option<u32>,
-        speed: Option<f32>,
-        sound_mode: Option<String>,
-        reactivity: Option<f32>,
-        sensitivity: Option<f32>,
-    },
+    Patch(Patch),
+}
+
+/// Settings to change; anything left `None` stays as it is.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Patch {
+    pub mode: Option<String>,
+    pub brightness: Option<f32>,
+    pub color: Option<String>,
+    pub fps: Option<u32>,
+    pub speed: Option<f32>,
+    pub sound_mode: Option<String>,
+    pub reactivity: Option<f32>,
+    pub sensitivity: Option<f32>,
+    pub warmth: Option<f32>,
+    pub gamma: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -148,19 +154,7 @@ fn handle_client(
     let resp = match req {
         IpcRequest::Status => IpcResponse {
             ok: true,
-            status: Some({
-                let cfg = config.read().unwrap();
-                let mut st = status.lock().unwrap();
-                st.effect = cfg.effect.mode.as_str().to_string();
-                st.brightness = cfg.effect.brightness;
-                st.fps = cfg.effect.fps;
-                st.speed = cfg.effect.speed;
-                st.color = cfg.solid.color.clone();
-                st.sound_mode = cfg.audio.sound_mode.as_str().to_string();
-                st.reactivity = cfg.audio.reactivity;
-                st.sensitivity = cfg.audio.sensitivity;
-                st.clone()
-            }),
+            status: Some(synced_status(&config, &status)),
             error: None,
         },
         IpcRequest::Stop => {
@@ -212,7 +206,7 @@ fn handle_client(
                 error: None,
             }
         }
-        IpcRequest::Patch {
+        IpcRequest::Patch(Patch {
             mode,
             brightness,
             color,
@@ -221,7 +215,9 @@ fn handle_client(
             sound_mode,
             reactivity,
             sensitivity,
-        } => {
+            warmth,
+            gamma,
+        }) => {
             if let Some(c) = &color {
                 let c = c.trim_start_matches('#');
                 anyhow::ensure!(
@@ -262,6 +258,15 @@ fn handle_client(
                 if let Some(s) = sensitivity {
                     cfg.audio.sensitivity = s.clamp(0.0, 1.0);
                 }
+                if let Some(w) = warmth {
+                    cfg.candle.warmth = w.clamp(0.0, 1.0);
+                }
+                #[cfg(feature = "screen")]
+                if let Some(g) = gamma {
+                    cfg.screen.gamma = g.clamp(1.0, 3.0);
+                }
+                #[cfg(not(feature = "screen"))]
+                let _ = gamma;
             }
             let new_mode = config.read().unwrap().effect.mode;
             if mode_change && old_mode != new_mode {
@@ -274,21 +279,9 @@ fn handle_client(
             } else {
                 save_config(&config, &config_path)?;
             }
-            {
-                let cfg = config.read().unwrap();
-                let mut st = status.lock().unwrap();
-                st.brightness = cfg.effect.brightness;
-                st.fps = cfg.effect.fps;
-                st.speed = cfg.effect.speed;
-                st.color = cfg.solid.color.clone();
-                st.effect = cfg.effect.mode.as_str().to_string();
-                st.sound_mode = cfg.audio.sound_mode.as_str().to_string();
-                st.reactivity = cfg.audio.reactivity;
-                st.sensitivity = cfg.audio.sensitivity;
-            }
             IpcResponse {
                 ok: true,
-                status: Some(status.lock().unwrap().clone()),
+                status: Some(synced_status(&config, &status)),
                 error: None,
             }
         }
@@ -296,6 +289,26 @@ fn handle_client(
     let mut stream = reader.into_inner();
     writeln!(stream, "{}", serde_json::to_string(&resp)?)?;
     Ok(())
+}
+
+/// Status with the settings fields taken from the live config.
+fn synced_status(config: &Arc<RwLock<RuntimeConfig>>, status: &Arc<Mutex<DaemonStatus>>) -> DaemonStatus {
+    let cfg = config.read().unwrap();
+    let mut st = status.lock().unwrap();
+    st.effect = cfg.effect.mode.as_str().to_string();
+    st.brightness = cfg.effect.brightness;
+    st.fps = cfg.effect.fps;
+    st.speed = cfg.effect.speed;
+    st.color = cfg.solid.color.clone();
+    st.sound_mode = cfg.audio.sound_mode.as_str().to_string();
+    st.reactivity = cfg.audio.reactivity;
+    st.sensitivity = cfg.audio.sensitivity;
+    st.warmth = cfg.candle.warmth;
+    #[cfg(feature = "screen")]
+    {
+        st.gamma = cfg.screen.gamma;
+    }
+    st.clone()
 }
 
 fn save_config(config: &Arc<RwLock<RuntimeConfig>>, path: &Path) -> anyhow::Result<()> {

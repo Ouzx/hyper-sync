@@ -601,6 +601,7 @@ fn run_capture(
                         st.height = height;
                         st.serial_ok = true;
                         st.detail = format!("{width}x{height}");
+                        st.leds = crate::effects::to_hex(&rgb);
                         #[cfg(feature = "audio")]
                         {
                             st.audio_level = state.audio.level();

@@ -3,7 +3,7 @@ mod lock;
 mod state;
 mod supervisor;
 
-pub use ipc::{cleanup_stale_socket, daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse};
+pub use ipc::{cleanup_stale_socket, daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse, Patch};
 pub use state::{DaemonStatus, FpsMeter};
 
 use std::io::{BufRead, BufReader};
@@ -150,7 +150,9 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
             } else if audio_monitor.is_running() {
                 audio_monitor.stop();
             }
-            status.lock().unwrap().audio_level = audio_snapshot.level();
+            let mut st = status.lock().unwrap();
+            st.audio_level = audio_snapshot.level();
+            st.spectrum = if audio_monitor.is_running() { audio_snapshot.spectrum().to_vec() } else { Vec::new() };
             drop(cfg);
         }
         if shutdown.load(Ordering::Relaxed) {

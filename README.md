@@ -127,25 +127,26 @@ Requires `parec` (PipeWire) on `PATH`.
 
 ### TUI
 
-Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running.
+Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running. Fits 80×24; **`?`** lists every key.
 
-**Layout:** status (left) · controls — visual + audio groups (center) · effect list (right)
+**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, with the effect, frame rate and connection status inside) · controls with their keys (left) · numbered effects (right). Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
 
 | Key | Action |
 |-----|--------|
-| `w` / `s` | Brightness down / up |
+| `↑` / `↓`, `Enter` | Browse effects — the one under the cursor starts when you pause; `Enter` starts it now |
+| `1`–`21` | Jump to an effect by number |
+| `w` / `s` | Brightness up / down |
 | `a` / `d` | Speed down / up |
 | `-` / `=` | Cycle FPS preset |
-| `↑` / `↓` | Select effect (digits jump) |
 | `←` / `→` | Cycle color preset |
+| `c` | Custom color dial |
+| `[` / `]` | Candle warmth · screen-sync gamma |
 | `Tab` | Cycle sound mode |
 | `j` / `k` | Audio boost down / up |
 | `h` / `l` | Sensitivity down / up |
 | `R` | Reselect screen capture |
 | `Ctrl+R` | Restart daemon effect |
-| `Ctrl+C` | Detach TUI |
-
-FPS and color pickers show the selected preset in `[brackets]`; the legend carries shortcut hints.
+| `q` / `Esc` / `Ctrl+C` | Detach TUI |
 
 ### System tray
 
@@ -283,6 +284,7 @@ hyper-sync ctl status [--json]
 hyper-sync ctl stop | restart | quit | reselect-screen
 hyper-sync ctl flash 00ff00 [--count 3]
 hyper-sync ctl set --mode screen --brightness 0.2 --fps 30 --speed 1.5 --color ff3300
+hyper-sync ctl set --warmth 0.8 --gamma 2.0
 hyper-sync install app | service
 hyper-sync uninstall app | service
 ```

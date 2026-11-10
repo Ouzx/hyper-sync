@@ -24,7 +24,7 @@ use config::DeviceConfig;
 use anyhow::Context;
 
 #[cfg(feature = "daemon")]
-use daemon::{daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse};
+use daemon::{daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse, Patch};
 
 #[derive(Parser)]
 #[command(name = "hyper-sync", about = "Low-latency Skydimo LED sync")]
@@ -144,6 +144,12 @@ enum CtlAction {
         fps: Option<u32>,
         #[arg(long)]
         speed: Option<f32>,
+        /// Candle: 0 = accent color, 1 = candle amber
+        #[arg(long)]
+        warmth: Option<f32>,
+        /// Screen sync gamma, 1.0 (off) to 3.0
+        #[arg(long)]
+        gamma: Option<f32>,
     },
 }
 
@@ -173,16 +179,13 @@ fn main() -> anyhow::Result<()> {
         } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
-                patch_config(IpcRequest::Patch {
+                patch_config(IpcRequest::Patch(Patch {
                     mode: Some("solid".into()),
                     brightness: Some(brightness),
                     color: Some(color.clone()),
                     fps: Some(fps),
-                    speed: None,
-                    sound_mode: None,
-                    reactivity: None,
-                    sensitivity: None,
-                })
+                    ..Default::default()
+                }))
             })? {
                 return Ok(());
             }
@@ -218,16 +221,12 @@ fn main() -> anyhow::Result<()> {
         } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
-                patch_config(IpcRequest::Patch {
+                patch_config(IpcRequest::Patch(Patch {
                     mode: Some("candle".into()),
-                    brightness: None,
-                    color: None,
                     fps: Some(fps),
                     speed: Some(speed),
-                    sound_mode: None,
-                    reactivity: None,
-                    sensitivity: None,
-                })
+                    ..Default::default()
+                }))
             })? {
                 return Ok(());
             }
@@ -253,16 +252,12 @@ fn main() -> anyhow::Result<()> {
         } => {
             #[cfg(feature = "daemon")]
             if try_ipc_legacy(|| {
-                patch_config(IpcRequest::Patch {
+                patch_config(IpcRequest::Patch(Patch {
                     mode: Some("screen".into()),
                     brightness: Some(brightness),
-                    color: None,
                     fps: Some(fps),
-                    speed: None,
-                    sound_mode: None,
-                    reactivity: None,
-                    sensitivity: None,
-                })
+                    ..Default::default()
+                }))
             })? {
                 return Ok(());
             }
@@ -350,17 +345,19 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
             color,
             fps,
             speed,
+            warmth,
+            gamma,
         } => {
-            ipc_request(&IpcRequest::Patch {
+            ipc_request(&IpcRequest::Patch(Patch {
                 mode,
                 brightness,
                 color,
                 fps,
                 speed,
-                sound_mode: None,
-                reactivity: None,
-                sensitivity: None,
-            })?;
+                warmth,
+                gamma,
+                ..Default::default()
+            }))?;
             Ok(())
         }
     }

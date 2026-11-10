@@ -28,6 +28,15 @@ pub struct DaemonStatus {
     pub reactivity: f32,
     #[serde(default = "default_sensitivity")]
     pub sensitivity: f32,
+    #[serde(default)]
+    pub warmth: f32,
+    #[serde(default)]
+    pub gamma: f32,
+    /// What the LEDs show right now: hex RGB, one triple per LED.
+    #[serde(default)]
+    pub leds: String,
+    #[serde(default)]
+    pub spectrum: Vec<f32>,
 }
 
 fn default_reactivity() -> f32 {
@@ -91,6 +100,13 @@ impl DaemonStatus {
             audio_level: 0.0,
             reactivity: cfg.audio.reactivity,
             sensitivity: cfg.audio.sensitivity,
+            warmth: cfg.candle.warmth,
+            #[cfg(feature = "screen")]
+            gamma: cfg.screen.gamma,
+            #[cfg(not(feature = "screen"))]
+            gamma: 1.0,
+            leds: String::new(),
+            spectrum: Vec::new(),
         }
     }
 }

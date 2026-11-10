@@ -73,6 +73,7 @@ pub fn run(
             },
         );
         finish(&mut rgb, &cfg, 1.0, #[cfg(feature = "audio")] &audio);
+        let shown = to_hex(&rgb);
         writer.lock().unwrap().write_frame(&build_frame(cfg.device.leds, &rgb)?)?;
 
         let actual = fps_meter.tick();
@@ -84,6 +85,7 @@ pub fn run(
             st.speed = cfg.effect.speed;
             st.serial_ok = true;
             st.color = cfg.solid.color.clone();
+            st.leds = shown;
             st.detail = match mode {
                 EffectMode::Solid if is_rainbow_color(&cfg.solid.color) => "rainbow".into(),
                 EffectMode::Solid => format!("#{}", cfg.solid.color),
@@ -154,6 +156,16 @@ pub fn finish(
             }
         }
     }
+}
+
+/// LED bytes as hex, for the status (the TUI's strip preview).
+pub fn to_hex(rgb: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(rgb.len() * 2);
+    for b in rgb {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Deterministic hash of (a, b) to [0, 1).
