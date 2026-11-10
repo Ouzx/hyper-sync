@@ -107,6 +107,10 @@ impl Tray for HyperTray {
                     MenuItem::SubMenu(SubMenu {
                         label: "Hyperion".into(),
                         submenu: vec![
+                            patch_item("Breath", "breath"),
+                            patch_item("Cinema Brighten", "cinema_brighten"),
+                            patch_item("Cinema Dim", "cinema_dim"),
+                            patch_item("Notify Blue", "notify_blue"),
                             patch_item("Rainbow Mood", "rainbow_mood"),
                             patch_item("Mood Blobs", "mood_blobs"),
                             patch_item("Sea Waves", "sea_waves"),

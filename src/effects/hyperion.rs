@@ -63,8 +63,57 @@ pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
         EffectMode::HyperionFire => gif(c, FIRE_GIF, 25.0),
         EffectMode::Lights => gif(c, LIGHTS_GIF, 25.0),
         EffectMode::Matrix => gif(c, MATRIX_GIF, 30.0),
+        // fade.py presets.
+        EffectMode::Breath => fade(c, &Fade { from: [50; 3], to: [255; 3], up: 3.0, hold_to: 0.05, down: 1.0, hold_from: 0.25, times: 0, stay: true }),
+        EffectMode::NotifyBlue => fade(c, &Fade { from: [0, 0, 50], to: [0, 0, 255], up: 0.2, hold_to: 0.04, down: 0.1, hold_from: 0.15, times: 3, stay: false }),
+        EffectMode::CinemaBrighten => fade(c, &CINEMA_UP),
+        EffectMode::CinemaDim => fade(c, &Fade { up: 0.0, down: 5.0, ..CINEMA_UP }),
         _ => vec![0; n * 3],
     }
+}
+
+/// A fade.py preset (times in seconds).
+struct Fade {
+    from: [u8; 3],
+    to: [u8; 3],
+    up: f32,
+    hold_to: f32,
+    down: f32,
+    hold_from: f32,
+    /// Cycles to run; 0 = forever.
+    times: u32,
+    /// Keep the last colour afterwards (else go dark).
+    stay: bool,
+}
+
+/// "Cinema brighten lights": dim amber up to bright amber over 5 s, then stay (for when the film
+/// ends). "Cinema dim lights" is the same fade downward.
+const CINEMA_UP: Fade = Fade { from: [136, 97, 7], to: [238, 173, 47], up: 5.0, hold_to: 0.0, down: 0.0, hold_from: 0.0, times: 1, stay: true };
+
+/// fade.py: fade `from` → `to`, hold, fade back, hold; `times` cycles, then keep the last colour
+/// (after the script's half-second pause) or go dark.
+fn fade(c: &Ctx, f: &Fade) -> Vec<u8> {
+    let cycle = f.up + f.hold_to + f.down + f.hold_from;
+    let mix = |a: [u8; 3], b: [u8; 3], k: f32| -> [u8; 3] {
+        std::array::from_fn(|i| (f32::from(a[i]) + (f32::from(b[i]) - f32::from(a[i])) * k.clamp(0.0, 1.0)).round() as u8)
+    };
+    let done = f.times > 0 && c.t >= cycle * f.times as f32;
+    let last = if f.down > 0.0 || f.hold_from > 0.0 { f.from } else { f.to };
+    let color = if done {
+        if f.stay || c.t < cycle * f.times as f32 + 0.5 { last } else { [0, 0, 0] }
+    } else {
+        let p = c.t % cycle;
+        if p < f.up {
+            mix(f.from, f.to, p / f.up)
+        } else if p < f.up + f.hold_to {
+            f.to
+        } else if p < f.up + f.hold_to + f.down {
+            mix(f.to, f.from, (p - f.up - f.hold_to) / f.down)
+        } else {
+            f.from
+        }
+    };
+    color.repeat(c.n)
 }
 
 /// Hyperion's GIF animations, every frame shrunk to 32×18 RGB with area averaging (each cell is the
@@ -694,6 +743,18 @@ mod tests {
         let lum = |i: usize| led(&f, i).iter().map(|&c| u32::from(c)).sum::<u32>();
         // LED 0 is the bottom of the right side, LED 16 its top corner.
         assert!(lum(0) > 3 * lum(16), "bottom {} vs top {}", lum(0), lum(16));
+    }
+
+    #[test]
+    fn cinema_fades_then_stays() {
+        let led0 = |mode, t| led(&frame_at(mode, "rainbow", t), 0);
+        assert_eq!(led0(EffectMode::CinemaBrighten, 0.02), [136, 97, 7]);
+        assert_eq!(led0(EffectMode::CinemaBrighten, 9.0), [238, 173, 47]);
+        assert_eq!(led0(EffectMode::CinemaDim, 0.02), [238, 173, 47]);
+        assert_eq!(led0(EffectMode::CinemaDim, 9.0), [136, 97, 7]);
+        // Notify blue: three blinks (~1.5 s), then dark.
+        assert_eq!(led0(EffectMode::NotifyBlue, 0.42), [0, 0, 50]); // holding dim between blinks
+        assert_eq!(led0(EffectMode::NotifyBlue, 3.0), [0, 0, 0]);
     }
 
     #[test]

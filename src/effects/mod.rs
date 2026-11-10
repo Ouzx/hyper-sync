@@ -153,7 +153,11 @@ fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
         | EffectMode::Xmas
         | EffectMode::HyperionFire
         | EffectMode::Lights
-        | EffectMode::Matrix => hyperion::render(mode, c),
+        | EffectMode::Matrix
+        | EffectMode::Breath
+        | EffectMode::NotifyBlue
+        | EffectMode::CinemaBrighten
+        | EffectMode::CinemaDim => hyperion::render(mode, c),
         _ => animated::render(mode, c),
     }
 }

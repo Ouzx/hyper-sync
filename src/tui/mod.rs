@@ -19,8 +19,8 @@ use crate::daemon::{daemon_running, ipc_request, DaemonStatus, IpcRequest, Patch
 use crate::effects::solid::{hsv_to_rgb, is_rainbow_color, parse_color, rgb_to_hex, rgb_to_hsv};
 use crate::layout::segment_bounds;
 
-/// Effects in display order: (id, label, group, ported from Hyperion.ng). Groups become headers
-/// in the effects panel; the number keys follow this order.
+/// Effects in display order: (id, label, group, ported from Hyperion.ng). The index is the effect's
+/// number key (Off is 0 and always pinned on top); groups become headers in the effects panel.
 const MODES: &[(&str, &str, &str, bool)] = &[
     ("off", "Off", "screen & sound", false),
     ("screen", "Screen Sync", "screen & sound", false),
@@ -32,6 +32,9 @@ const MODES: &[(&str, &str, &str, bool)] = &[
     ("lava", "Lava", "calm", false),
     ("aurora", "Aurora", "calm", false),
     ("pulse", "Pulse", "calm", false),
+    ("breath", "Breath", "calm", true),
+    ("cinema_brighten", "Cinema Brighten", "calm", true),
+    ("cinema_dim", "Cinema Dim", "calm", true),
     ("rainbow_mood", "Rainbow Mood", "calm", true),
     ("mood_blobs", "Mood Blobs", "calm", true),
     ("sea_waves", "Sea Waves", "calm", true),
@@ -64,6 +67,7 @@ const MODES: &[(&str, &str, &str, bool)] = &[
     ("flags", "Flags DE/SE", "tools", true),
     ("led_test", "LED Test", "tools", true),
     ("led_test_seq", "LED Test Sequence", "tools", true),
+    ("notify_blue", "Notify Blue", "tools", true),
 ];
 const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
@@ -178,7 +182,7 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
         peak_amps: 0.0,
     };
     poll_status(&mut state);
-    state.cursor = state.favorites.len() + mode_index(&state.st.effect).unwrap_or(0);
+    state.cursor = list_pos(&state, mode_index(&state.st.effect).unwrap_or(0));
     let mut last_poll = Instant::now();
 
     while !quit.load(Ordering::Relaxed) {
@@ -248,7 +252,7 @@ fn handle_key(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> bo
             select_mode(state, idx);
         }
         // Favorite: pin the effect under the cursor to the top and start it; again to unpin.
-        KeyCode::Char('f' | 'F') => {
+        KeyCode::Char('f' | 'F') if cursor_mode(state) != 0 => {
             let idx = cursor_mode(state);
             if let Some(k) = state.favorites.iter().position(|&f| f == idx) {
                 state.favorites.remove(k);
@@ -256,7 +260,7 @@ fn handle_key(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> bo
                 state.favorites.push(idx);
                 select_mode(state, idx);
             }
-            state.cursor = state.favorites.len() + idx;
+            state.cursor = list_pos(state, idx);
             state.browse_since = None;
             save_favorites(&state.favorites);
         }
@@ -264,8 +268,8 @@ fn handle_key(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> bo
         KeyCode::Char(c) if c.is_ascii_digit() => {
             state.digits.push(c);
             state.digits_since = Instant::now();
-            // Apply as soon as no longer number could start with what was typed.
-            if state.digits.parse::<usize>().unwrap_or(0) * 10 > MODES.len() {
+            // Apply as soon as no longer number could start with what was typed (0 is Off at once).
+            if state.digits == "0" || state.digits.parse::<usize>().unwrap_or(0) * 10 > MODES.len() - 1 {
                 apply_digits(state);
             }
         }
@@ -355,7 +359,7 @@ fn update_status(state: &mut UiState, status: Option<DaemonStatus>) {
     }
     if state.st.effect != st.effect && state.browse_since.is_none() {
         if let Some(i) = mode_index(&st.effect) {
-            state.cursor = state.favorites.len() + i;
+            state.cursor = list_pos(state, i);
         }
     }
     // 20 mA per channel at full is the usual WS2812-style figure; an estimate, not a measurement.
@@ -385,7 +389,20 @@ fn select_mode(state: &mut UiState, idx: usize) {
 
 /// The effect (index into MODES) under the cursor.
 fn cursor_mode(state: &UiState) -> usize {
-    state.favorites.get(state.cursor).copied().unwrap_or(state.cursor.saturating_sub(state.favorites.len()).min(MODES.len() - 1))
+    match state.cursor {
+        0 => 0,
+        c if c <= state.favorites.len() => state.favorites[c - 1],
+        c => (c - state.favorites.len()).min(MODES.len() - 1),
+    }
+}
+
+/// Where effect `idx` sits in the effects panel: Off (always first), the favorites, then the rest.
+fn list_pos(state: &UiState, idx: usize) -> usize {
+    if idx == 0 {
+        0
+    } else {
+        state.favorites.len() + idx
+    }
 }
 
 fn favorites_path() -> std::path::PathBuf {
@@ -393,7 +410,8 @@ fn favorites_path() -> std::path::PathBuf {
 }
 
 fn load_favorites() -> Vec<usize> {
-    std::fs::read_to_string(favorites_path()).unwrap_or_default().lines().filter_map(|l| mode_index(l.trim())).collect()
+    let text = std::fs::read_to_string(favorites_path()).unwrap_or_default();
+    text.lines().filter_map(|l| mode_index(l.trim())).filter(|&i| i != 0).collect()
 }
 
 fn save_favorites(favorites: &[usize]) {
@@ -421,10 +439,10 @@ fn edit_config(terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBacke
 }
 
 fn apply_digits(state: &mut UiState) {
-    let pick = state.digits.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
+    let pick = state.digits.parse::<usize>().ok();
     state.digits.clear();
     if let Some(idx) = pick.filter(|&i| i < MODES.len()) {
-        state.cursor = state.favorites.len() + idx;
+        state.cursor = list_pos(state, idx);
         select_mode(state, idx);
     }
 }
@@ -895,33 +913,30 @@ fn draw_effects(f: &mut Frame, area: Rect, state: &UiState) {
         };
         let mut spans = vec![
             Span::styled(if cursor { "▶" } else { " " }, Style::new().fg(Color::Cyan)),
-            Span::styled(format!("{:>2} ", idx + 1), DIM),
+            Span::styled(format!("{idx:>2} "), DIM),
             Span::styled(label, style),
         ];
         if hyperion {
             spans.push(Span::styled(" H", DIM));
         }
-        if pos >= state.favorites.len() && state.favorites.contains(&idx) {
+        if pos > state.favorites.len() && state.favorites.contains(&idx) {
             spans.push(Span::styled(" ★", Style::new().fg(Color::Yellow)));
         }
         Line::from(spans)
     };
-    // Favorites stay pinned on top (up to half the panel); the full list scrolls below them.
-    let mut favs = Vec::new();
+    // Off and the favorites stay pinned on top (up to half the panel); the rest scrolls below.
+    let mut favs = vec![Line::styled("★ favorites", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
     let mut fav_cursor = None;
-    if !state.favorites.is_empty() {
-        favs.push(Line::styled("★ favorites", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
-        for (pos, &idx) in state.favorites.iter().enumerate() {
-            if pos == state.cursor {
-                fav_cursor = Some(favs.len());
-            }
-            favs.push(entry(pos, idx));
+    for (pos, idx) in std::iter::once(0).chain(state.favorites.iter().copied()).enumerate() {
+        if pos == state.cursor {
+            fav_cursor = Some(favs.len());
         }
+        favs.push(entry(pos, idx));
     }
     let mut all = Vec::new();
     let mut all_cursor = None;
     let mut group = "";
-    for (idx, m) in MODES.iter().enumerate() {
+    for (idx, m) in MODES.iter().enumerate().skip(1) {
         if m.2 != group {
             group = m.2;
             all.push(Line::styled(format!("─ {group}"), DIM.add_modifier(Modifier::BOLD)));
@@ -1011,7 +1026,7 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 fn draw_help(f: &mut Frame) {
     const KEYS: &[(&str, &str)] = &[
         ("↑/↓, Enter", "browse; starts when you pause (Enter: now)"),
-        ("1–42", "jump to an effect by number"),
+        ("0–45", "jump to an effect by number (0 = off)"),
         ("f", "favorite: start it and pin it to the top (again: unpin)"),
         ("w/s", "brightness"),
         ("a/d", "speed (animated effects)"),
