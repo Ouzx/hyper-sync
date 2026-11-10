@@ -27,7 +27,6 @@ pub fn run(cfg: DeviceConfig, warmth: f32, speed: f32, fps: u32) -> anyhow::Resu
         Arc::new(RwLock::new(rc)),
         Arc::new(AtomicBool::new(false)),
         Arc::new(Mutex::new(DaemonStatus::default())),
-        #[cfg(feature = "audio")]
         Arc::new(crate::audio::AudioSnapshot::new()),
     )
 }

@@ -8,7 +8,6 @@ mod install;
 mod layout;
 mod protocol;
 mod serial;
-#[cfg(feature = "audio")]
 mod audio;
 #[cfg(feature = "tui")]
 mod tui;

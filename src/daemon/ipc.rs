@@ -28,7 +28,6 @@ pub enum IpcRequest {
     ReselectScreen,
     /// Blink a color over whatever is running (notifications, build results).
     Flash { color: String, count: u32 },
-    Set { config: RuntimeConfig },
     Patch(Patch),
 }
 
@@ -186,15 +185,6 @@ fn handle_client(
         }
         IpcRequest::Quit => {
             shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
-            IpcResponse {
-                ok: true,
-                status: Some(status.lock().unwrap().clone()),
-                error: None,
-            }
-        }
-        IpcRequest::Set { config: new_cfg } => {
-            *config.write().unwrap() = new_cfg;
-            save_and_notify(&config, &config_path, &reload_tx, ReloadMsg::Force)?;
             IpcResponse {
                 ok: true,
                 status: Some(status.lock().unwrap().clone()),

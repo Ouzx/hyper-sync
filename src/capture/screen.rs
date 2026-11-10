@@ -374,42 +374,33 @@ pub(crate) async fn open_portal_session(
         eprintln!("portal: cleared saved permission");
     }
 
-    let saved_token = if forget_portal {
-        None
-    } else {
-        config::load_portal_token()
-    };
-    let persist = if forget_portal {
-        PersistMode::DoNot
-    } else {
-        PersistMode::ExplicitlyRevoked
-    };
-
+    let saved_token = config::load_portal_token();
     if saved_token.is_some() {
         eprintln!("portal: restoring screencast session…");
     } else {
         eprintln!("portal: requesting screen capture permission…");
     }
 
-    match open_portal_session_inner(monitor, saved_token.clone(), persist, cancel.clone()).await {
+    match open_portal_session_inner(monitor, saved_token.clone(), cancel.clone()).await {
         Ok(session) => Ok(session),
-        Err(e) if saved_token.is_some() && !forget_portal => {
+        Err(e) if saved_token.is_some() => {
             eprintln!("portal: restore failed ({e:#}), clearing token and re-prompting…");
             config::clear_portal_token()?;
             tokio::time::sleep(Duration::from_secs(1)).await;
             if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
                 anyhow::bail!("portal open cancelled");
             }
-            open_portal_session_inner(monitor, None, PersistMode::DoNot, cancel).await
+            open_portal_session_inner(monitor, None, cancel).await
         }
         Err(e) => Err(e),
     }
 }
 
+/// Every pick is persisted, a fresh one too (after `R` or a failed restore), so the next start
+/// restores it instead of asking again.
 async fn open_portal_session_inner(
     monitor: u32,
     saved_token: Option<String>,
-    persist: PersistMode,
     cancel: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<(
     ashpd::desktop::screencast::Stream,
@@ -462,7 +453,7 @@ async fn open_portal_session_inner(
                     SourceType::Monitor.into(),
                     false,
                     saved_token_ref,
-                    persist,
+                    PersistMode::ExplicitlyRevoked,
                 )
                 .await?
                 .response()

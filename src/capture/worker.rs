@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
@@ -23,7 +23,6 @@ use crate::effects::finish;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
 
-#[cfg(feature = "audio")]
 use crate::audio::AudioSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,8 +42,11 @@ enum ScreenCmd {
 
 pub struct ScreenWorker {
     cmd_tx: Sender<ScreenCmd>,
+    /// Stops every capture asked for so far, running or still queued; a new request clears it.
     cancel: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
+    /// Captures asked for and not finished yet. Counted when asked (not when the worker gets to
+    /// them), so a stop right after a start never misses the start.
+    pending: Arc<AtomicUsize>,
     state: Arc<Mutex<WorkerState>>,
     handle: Option<JoinHandle<()>>,
 }
@@ -54,30 +56,26 @@ impl ScreenWorker {
         config: Arc<RwLock<RuntimeConfig>>,
         status: Arc<Mutex<DaemonStatus>>,
         writer: Arc<Mutex<SerialWriter>>,
-        #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
+        audio: Arc<AudioSnapshot>,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let running = Arc::new(AtomicBool::new(false));
-        let pending_acquire = Arc::new(AtomicBool::new(false));
+        let pending = Arc::new(AtomicUsize::new(0));
         let state = Arc::new(Mutex::new(WorkerState::Idle));
 
         let worker_cancel = Arc::clone(&cancel);
-        let worker_running = Arc::clone(&running);
-        let worker_pending = Arc::clone(&pending_acquire);
+        let worker_pending = Arc::clone(&pending);
         let worker_state = Arc::clone(&state);
 
         let handle = thread::spawn(move || {
             worker_loop(
                 cmd_rx,
                 worker_cancel,
-                worker_running,
                 worker_pending,
                 worker_state,
                 config,
                 status,
                 writer,
-                #[cfg(feature = "audio")]
                 audio,
             );
         });
@@ -85,35 +83,42 @@ impl ScreenWorker {
         Self {
             cmd_tx,
             cancel,
-            running,
+            pending,
             state,
             handle: Some(handle),
         }
     }
 
     pub fn acquire(&self) {
-        let _ = self.cmd_tx.send(ScreenCmd::Acquire);
+        self.request(ScreenCmd::Acquire);
     }
 
+    /// Capture again with the saved permission cleared, so the portal asks which screen.
+    pub fn reselect(&self) {
+        self.request(ScreenCmd::Reselect);
+    }
+
+    fn request(&self, cmd: ScreenCmd) {
+        self.cancel.store(false, Ordering::SeqCst);
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Stop every capture asked for so far and wait (up to 3 s) for them to end.
     pub fn release(&self) {
-        if !self.running.load(Ordering::Relaxed) {
+        if !self.is_running() {
             return;
         }
         self.cancel.store(true, Ordering::SeqCst);
         let _ = self.cmd_tx.send(ScreenCmd::Release);
         let deadline = Instant::now() + Duration::from_secs(3);
-        while self.running.load(Ordering::Relaxed) && Instant::now() < deadline {
+        while self.is_running() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
-        if self.running.load(Ordering::Relaxed) {
-            eprintln!("screen worker: release timed out — forcing idle");
-            self.running.store(false, Ordering::SeqCst);
+        if self.is_running() {
+            // Still counted as running, so the next stop cancels it again.
+            eprintln!("screen worker: release timed out, capture still ending");
         }
-    }
-
-    pub fn reselect(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
-        let _ = self.cmd_tx.send(ScreenCmd::Reselect);
     }
 
     pub fn shutdown(&mut self) {
@@ -136,122 +141,40 @@ impl ScreenWorker {
         *self.state.lock().unwrap()
     }
 
+    /// A capture is running or queued.
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
-    }
-
-    pub fn wait_idle(&self) {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.running.load(Ordering::Relaxed) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        if self.running.load(Ordering::Relaxed) {
-            eprintln!("screen worker: wait_idle timed out — forcing idle");
-            self.running.store(false, Ordering::SeqCst);
-        }
+        self.pending.load(Ordering::SeqCst) > 0
     }
 }
 
 fn worker_loop(
     cmd_rx: Receiver<ScreenCmd>,
     cancel: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
-    pending_acquire: Arc<AtomicBool>,
+    pending: Arc<AtomicUsize>,
     state: Arc<Mutex<WorkerState>>,
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
     writer: Arc<Mutex<SerialWriter>>,
-    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
+    audio: Arc<AudioSnapshot>,
 ) {
     let rt = Arc::new(
         tokio::runtime::Runtime::new().expect("screen worker tokio runtime"),
     );
     let last_portal_close = Cell::new(None::<Instant>);
 
-    loop {
-        let cmd = match cmd_rx.recv() {
-            Ok(c) => c,
-            Err(_) => break,
-        };
-
+    // Commands are read only between captures: a running capture ends through `cancel`.
+    for cmd in cmd_rx {
         match cmd {
-            ScreenCmd::Acquire => {
-                if running.load(Ordering::Relaxed) {
-                    pending_acquire.store(true, Ordering::SeqCst);
-                    cancel.store(true, Ordering::SeqCst);
-                    eprintln!("screen worker: acquire coalesced (busy)");
-                    continue;
-                }
-                if *state.lock().unwrap() == WorkerState::Error {
-                    *state.lock().unwrap() = WorkerState::Idle;
-                }
-                loop {
-                    pending_acquire.store(false, Ordering::SeqCst);
-                    cancel.store(false, Ordering::SeqCst);
-                    running.store(true, Ordering::SeqCst);
-                    eprintln!("screen worker: acquire");
-                    let result = run_capture(
-                        Arc::clone(&rt),
-                        &last_portal_close,
-                        Arc::clone(&cancel),
-                        Arc::clone(&state),
-                        Arc::clone(&config),
-                        Arc::clone(&status),
-                        Arc::clone(&writer),
-                        false,
-                        #[cfg(feature = "audio")]
-                        Arc::clone(&audio),
-                    );
-                    portal_settle(&last_portal_close);
-                    running.store(false, Ordering::SeqCst);
-                    match result {
-                        Ok(()) => {
-                            *state.lock().unwrap() = WorkerState::Idle;
-                        }
-                        Err(e) if e.to_string().contains("portal open cancelled")
-                            || e.to_string().contains("cancelled") =>
-                        {
-                            eprintln!("screen worker: acquire cancelled");
-                            *state.lock().unwrap() = WorkerState::Idle;
-                        }
-                        Err(e) => {
-                            eprintln!("screen worker error: {e:#}");
-                            if e.to_string().contains("timed out") {
-                                let _ = config::clear_portal_token();
-                            }
-                            status.lock().unwrap().last_error = Some(e.to_string());
-                            *state.lock().unwrap() = WorkerState::Error;
-                        }
-                    }
-                    if !pending_acquire.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    if !config.read().unwrap().effect.mode.is_screen() {
-                        pending_acquire.store(false, Ordering::SeqCst);
-                        break;
-                    }
-                    eprintln!("screen worker: coalesced acquire retry");
-                    wait_portal_settle(&last_portal_close);
-                }
-            }
+            ScreenCmd::Acquire => {}
             ScreenCmd::Release => {
-                pending_acquire.store(false, Ordering::SeqCst);
-                eprintln!(
-                    "screen worker: release (running={})",
-                    running.load(Ordering::Relaxed)
-                );
-                cancel.store(true, Ordering::SeqCst);
-                if !running.load(Ordering::Relaxed) {
-                    clear_screen_status(&status);
-                    *state.lock().unwrap() = WorkerState::Idle;
-                }
+                eprintln!("screen worker: release");
+                clear_screen_status(&status);
+                *state.lock().unwrap() = WorkerState::Idle;
+                continue;
             }
             ScreenCmd::Reselect => {
-                pending_acquire.store(false, Ordering::SeqCst);
-                cancel.store(true, Ordering::SeqCst);
-                while running.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_millis(10));
-                }
+                // Clear again now the old capture has ended (it may have saved a token meanwhile),
+                // so the portal asks.
                 if let Err(e) = config::clear_portal_token() {
                     eprintln!("clear portal token: {e:#}");
                 }
@@ -260,57 +183,45 @@ fn worker_loop(
                 eprintln!("screen worker: reselect");
                 wait_portal_settle(&last_portal_close);
                 thread::sleep(PORTAL_RESELECT_SETTLE);
-
-                if !config.read().unwrap().effect.mode.is_screen() {
-                    continue;
-                }
-
-                cancel.store(false, Ordering::SeqCst);
-                running.store(true, Ordering::SeqCst);
-                let result = run_capture(
-                    Arc::clone(&rt),
-                    &last_portal_close,
-                    Arc::clone(&cancel),
-                    Arc::clone(&state),
-                    Arc::clone(&config),
-                    Arc::clone(&status),
-                    Arc::clone(&writer),
-                    true,
-                    #[cfg(feature = "audio")]
-                    Arc::clone(&audio),
-                );
-                portal_settle(&last_portal_close);
-                running.store(false, Ordering::SeqCst);
-                match result {
-                    Ok(()) => {
-                        *state.lock().unwrap() = WorkerState::Idle;
-                    }
-                    Err(e) if e.to_string().contains("portal open cancelled")
-                        || e.to_string().contains("cancelled") =>
-                    {
-                        eprintln!("screen worker: acquire cancelled");
-                        *state.lock().unwrap() = WorkerState::Idle;
-                    }
-                    Err(e) => {
-                        eprintln!("screen worker error: {e:#}");
-                        if e.to_string().contains("timed out") {
-                            let _ = config::clear_portal_token();
-                        }
-                        status.lock().unwrap().last_error = Some(e.to_string());
-                        *state.lock().unwrap() = WorkerState::Error;
-                    }
-                }
             }
             ScreenCmd::Shutdown => {
-                pending_acquire.store(false, Ordering::SeqCst);
-                cancel.store(true, Ordering::SeqCst);
-                while running.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_millis(10));
-                }
                 clear_screen_status(&status);
                 break;
             }
         }
+        // Skip a request that was stopped while it waited in the queue.
+        if !cancel.load(Ordering::SeqCst) && config.read().unwrap().effect.mode.is_screen() {
+            eprintln!("screen worker: acquire");
+            let result = run_capture(
+                Arc::clone(&rt),
+                &last_portal_close,
+                Arc::clone(&cancel),
+                Arc::clone(&state),
+                Arc::clone(&config),
+                Arc::clone(&status),
+                Arc::clone(&writer),
+                Arc::clone(&audio),
+            );
+            // No sleep here: the next capture waits out the rest of PORTAL_SETTLE before opening.
+            last_portal_close.set(Some(Instant::now()));
+            let next = match result {
+                Ok(()) => WorkerState::Idle,
+                Err(e) if e.to_string().contains("cancelled") => {
+                    eprintln!("screen worker: acquire cancelled");
+                    WorkerState::Idle
+                }
+                Err(e) => {
+                    eprintln!("screen worker error: {e:#}");
+                    if e.to_string().contains("timed out") {
+                        let _ = config::clear_portal_token();
+                    }
+                    status.lock().unwrap().last_error = Some(e.to_string());
+                    WorkerState::Error
+                }
+            };
+            *state.lock().unwrap() = next;
+        }
+        pending.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -337,11 +248,6 @@ fn wait_portal_settle(last_close: &Cell<Option<Instant>>) {
     }
 }
 
-fn portal_settle(last_close: &Cell<Option<Instant>>) {
-    last_close.set(Some(Instant::now()));
-    thread::sleep(PORTAL_SETTLE);
-}
-
 struct CtrlFrameState {
     writer: Arc<Mutex<SerialWriter>>,
     config: Arc<RwLock<RuntimeConfig>>,
@@ -358,7 +264,6 @@ struct CtrlFrameState {
     cancel: Arc<AtomicBool>,
     mainloop_ptr: *mut pw::sys::pw_main_loop,
     quit_reason: std::cell::RefCell<&'static str>,
-    #[cfg(feature = "audio")]
     audio: Arc<AudioSnapshot>,
 }
 
@@ -370,8 +275,7 @@ fn run_capture(
     config: Arc<RwLock<RuntimeConfig>>,
     status: Arc<Mutex<DaemonStatus>>,
     writer: Arc<Mutex<SerialWriter>>,
-    forget_portal: bool,
-    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
+    audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
@@ -418,7 +322,7 @@ fn run_capture(
     eprintln!("screen worker: opening portal…");
     let portal = match rt.block_on(open_portal_session(
         monitor,
-        forget_portal,
+        false,
         Some(Arc::clone(&cancel)),
     )) {
         Ok(p) => p,
@@ -486,7 +390,6 @@ fn run_capture(
         cancel: Arc::clone(&cancel),
         mainloop_ptr,
         quit_reason: std::cell::RefCell::new("unknown"),
-        #[cfg(feature = "audio")]
         audio,
     });
 
@@ -599,8 +502,10 @@ fn run_capture(
                     *prev = rgb.iter().map(|&c| f32::from(c)).collect();
                 }
                 drop(prev);
-                finish(&mut rgb, &cfg, cfg.screen.gamma, #[cfg(feature = "audio")] &state.audio);
-                let leds = cfg.device.leds;
+                finish(&mut rgb, &cfg, cfg.screen.gamma, &state.audio);
+                // Copy what the status needs before letting go: taking `config` while holding
+                // `status` (others lock config, then status) can deadlock when a writer queues.
+                let (leds, brightness, fps) = (cfg.device.leds, cfg.effect.brightness, cfg.effect.fps);
                 drop(cfg);
 
                 if let Ok(packet) = build_frame(leds, &rgb) {
@@ -611,18 +516,15 @@ fn run_capture(
                         }
                         let actual = state.fps_meter.borrow_mut().tick();
                         let mut st = state.status.lock().unwrap();
-                        st.brightness = state.config.read().unwrap().effect.brightness;
-                        st.fps = state.config.read().unwrap().effect.fps;
+                        st.brightness = brightness;
+                        st.fps = fps;
                         st.actual_fps = actual;
                         st.width = width;
                         st.height = height;
                         st.serial_ok = true;
                         st.detail = format!("{width}x{height}");
                         st.leds = crate::effects::to_hex(&rgb);
-                        #[cfg(feature = "audio")]
-                        {
-                            st.audio_level = state.audio.level();
-                        }
+                        st.audio_level = state.audio.level();
                     } else {
                         state.status.lock().unwrap().serial_ok = false;
                     }

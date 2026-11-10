@@ -212,7 +212,7 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 ./scripts/build.sh
 ```
 
-Builds with all features (`screen`, `daemon`, `audio`, `tui`, `tray`) and installs to:
+Builds with all features (`screen`, `daemon`, `tui`, `tray`) and installs to:
 
 - `~/.cargo/bin/hyper-sync` and `~/.local/bin/hyper-sync`
 - App icon: `~/.local/share/icons/hicolor/{scalable,256x256}/apps/hyper-sync.*` (for the menu and autostart entries; the tray has it built in)

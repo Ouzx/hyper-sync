@@ -11,7 +11,6 @@ use crate::serial::SerialWriter;
 #[cfg(feature = "screen")]
 use crate::capture::worker::{ScreenWorker, WorkerState};
 
-#[cfg(feature = "audio")]
 use crate::audio::AudioSnapshot;
 
 pub struct Supervisor {
@@ -23,7 +22,6 @@ pub struct Supervisor {
     last_effect_key: String,
     last_mode: EffectMode,
     effect_retry: Option<Instant>,
-    #[cfg(feature = "audio")]
     audio: Arc<AudioSnapshot>,
     #[cfg(feature = "screen")]
     screen: ScreenWorker,
@@ -37,7 +35,7 @@ impl Supervisor {
     pub fn new(
         config: Arc<RwLock<RuntimeConfig>>,
         status: Arc<Mutex<DaemonStatus>>,
-        #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
+        audio: Arc<AudioSnapshot>,
     ) -> Self {
         let cfg = config.read().unwrap().clone();
         let writer = Arc::new(Mutex::new(SerialWriter::new(cfg.device_config())));
@@ -46,7 +44,6 @@ impl Supervisor {
             Arc::clone(&config),
             Arc::clone(&status),
             Arc::clone(&writer),
-            #[cfg(feature = "audio")]
             Arc::clone(&audio),
         );
         Self {
@@ -58,7 +55,6 @@ impl Supervisor {
             last_effect_key: String::new(),
             last_mode: cfg.effect.mode,
             effect_retry: None,
-            #[cfg(feature = "audio")]
             audio,
             #[cfg(feature = "screen")]
             screen,
@@ -74,7 +70,6 @@ impl Supervisor {
         thread::sleep(Duration::from_millis(50));
         #[cfg(feature = "screen")]
         {
-            self.screen.wait_idle();
             self.screen_retry_count = 0;
         }
         self.start_effect();
@@ -188,7 +183,6 @@ impl Supervisor {
         let config = Arc::clone(&self.config);
         let status = Arc::clone(&self.status);
         let writer = Arc::clone(&self.writer);
-        #[cfg(feature = "audio")]
         let audio = Arc::clone(&self.audio);
 
         let mode = cfg.effect.mode;
@@ -204,7 +198,6 @@ impl Supervisor {
                     config,
                     cancel,
                     status,
-                    #[cfg(feature = "audio")]
                     audio,
                 ),
             };
@@ -252,12 +245,16 @@ impl Supervisor {
             }
         }
         if self.needs_restart() {
+            // One read guard: a second one in the same statement deadlocks if a writer queues between.
+            let (mode, key) = {
+                let cfg = self.config.read().unwrap();
+                (cfg.effect.mode, cfg.effect_key())
+            };
             eprintln!(
-                "supervisor: reload (mode {} -> {}, key {} -> {})",
+                "supervisor: reload (mode {} -> {}, key {} -> {key})",
                 self.last_mode.as_str(),
-                self.config.read().unwrap().effect.mode.as_str(),
+                mode.as_str(),
                 self.last_effect_key,
-                self.config.read().unwrap().effect_key(),
             );
             self.reload();
         } else if self.handle.as_ref().is_some_and(|h| h.is_finished())

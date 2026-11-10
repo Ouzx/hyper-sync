@@ -82,9 +82,7 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
     }
     eprintln!("hyper-sync daemon ipc ready");
 
-    #[cfg(feature = "audio")]
     let audio_snapshot = Arc::new(crate::audio::AudioSnapshot::new());
-    #[cfg(feature = "audio")]
     let mut audio_monitor = crate::audio::AudioMonitor::new(
         Arc::clone(&audio_snapshot),
         Arc::clone(&status),
@@ -94,12 +92,10 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
     let mut supervisor = supervisor::Supervisor::new(
         Arc::clone(&config),
         Arc::clone(&status),
-        #[cfg(feature = "audio")]
         Arc::clone(&audio_snapshot),
     );
     supervisor.reload();
 
-    #[cfg(feature = "audio")]
     if crate::audio::audio_needed(&config.read().unwrap()) {
         audio_monitor.start();
     }
@@ -140,7 +136,6 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
             }
         }
         supervisor.tick();
-        #[cfg(feature = "audio")]
         {
             let cfg = config.read().unwrap();
             if crate::audio::audio_needed(&cfg) {
@@ -162,7 +157,6 @@ pub fn run(with_tray: bool) -> anyhow::Result<()> {
 
     supervisor.stop_effect();
     supervisor.shutdown();
-    #[cfg(feature = "audio")]
     audio_monitor.stop();
     let _ = std::fs::remove_file(crate::config::ipc_socket_path());
     eprintln!("hyper-sync daemon stopped");
