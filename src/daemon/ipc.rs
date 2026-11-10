@@ -232,7 +232,7 @@ fn handle_client(
                     cfg.solid.color = c.trim_start_matches('#').to_string();
                 }
                 if let Some(f) = fps {
-                    cfg.effect.fps = f.max(1);
+                    cfg.effect.fps = f.clamp(1, crate::config::MAX_FPS);
                 }
                 if let Some(s) = speed {
                     cfg.effect.speed = s.clamp(0.1, 5.0);

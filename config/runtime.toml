@@ -8,7 +8,7 @@ leds = 65
 [effect]
 mode = "screen"      # any effect id, e.g. candle, lava, mood_blobs, off (see README)
 brightness = 0.15
-fps = 30             # up to ~57 at 115200 baud
+fps = 30             # up to 55 (a frame takes 17.4 ms on the wire at 115200 baud)
 speed = 1.0
 power = 0.5          # how strongly effects dim/flicker/contrast: 0 steady, 0.5 as designed, 1 strongest
 

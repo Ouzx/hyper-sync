@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::config::{self, EffectMode, RuntimeConfig};
+use crate::config::{EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
 use crate::protocol::black_frame;
 use crate::serial::SerialWriter;
@@ -95,7 +95,7 @@ impl Supervisor {
         {
             self.screen_retry_count = 0;
             self.last_screen_retry = None;
-            let _ = config::clear_portal_token();
+            let _ = crate::config::clear_portal_token();
             if !self.config.read().unwrap().effect.mode.is_screen() {
                 return;
             }

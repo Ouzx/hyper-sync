@@ -19,6 +19,7 @@ use crate::audio::{maybe_modulate, AudioSnapshot};
 
 /// Every effect in display order: (id, label, group, ported from Hyperion.ng). The TUI numbers them
 /// by index (Off is 0); the TUI and the tray menu group them by the third field.
+#[cfg(any(feature = "tui", feature = "tray"))]
 pub const CATALOG: &[(&str, &str, &str, bool)] = &[
     ("off", "Off", "screen & sound", false),
     ("screen", "Screen Sync", "screen & sound", false),
@@ -155,7 +156,7 @@ pub fn run(
         }
 
         // Sleep until the next frame is due — the ~17 ms serial write already used part of it.
-        next += Duration::from_secs_f64(1.0 / f64::from(cfg.effect.fps.max(1)));
+        next += crate::config::frame_interval(cfg.effect.fps);
         let now = Instant::now();
         if next > now {
             thread::sleep(next - now);

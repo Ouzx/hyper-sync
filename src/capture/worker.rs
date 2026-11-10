@@ -147,6 +147,7 @@ impl ScreenWorker {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn worker_loop(
     cmd_rx: Receiver<ScreenCmd>,
     cancel: Arc<AtomicBool>,
@@ -158,7 +159,12 @@ fn worker_loop(
     audio: Arc<AudioSnapshot>,
 ) {
     let rt = Arc::new(
-        tokio::runtime::Runtime::new().expect("screen worker tokio runtime"),
+        // Only runs a few portal calls; one worker (not one per core) keeps D-Bus moving between them.
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("screen worker tokio runtime"),
     );
     let last_portal_close = Cell::new(None::<Instant>);
 
@@ -267,6 +273,7 @@ struct CtrlFrameState {
     audio: Arc<AudioSnapshot>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_capture(
     rt: Arc<tokio::runtime::Runtime>,
     last_portal_close: &Cell<Option<Instant>>,
@@ -373,8 +380,7 @@ fn run_capture(
     let stream =
         pw::stream::StreamBox::new(&core, "hyper-sync", props).context("pipewire stream")?;
 
-    let fps = config.read().unwrap().effect.fps;
-    let min_interval = Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
+    let min_interval = config::frame_interval(config.read().unwrap().effect.fps);
     let frame_state = Rc::new(CtrlFrameState {
         writer,
         config: Arc::clone(&config),
@@ -461,8 +467,7 @@ fn run_capture(
 
                 let cfg = state.config.read().unwrap();
                 let mode = cfg.effect.mode;
-                let min_interval =
-                    Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
+                let min_interval = config::frame_interval(cfg.effect.fps);
                 // Frames arrive at the monitor's refresh rate; take one per interval, keeping the
                 // schedule (not the arrival time) so small lateness doesn't lower the frame rate.
                 let now = Instant::now();

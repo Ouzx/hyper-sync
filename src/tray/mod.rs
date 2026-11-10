@@ -163,6 +163,7 @@ impl Tray for HyperTray {
             let sel = nearest(&values, current);
             submenu(&format!("{title}: {now}"), vec![radio(&names, sel, move |k| set(values[k]))])
         };
+        #[cfg(feature = "screen")]
         let ms = |v: f32| if v < 0.01 { "off".to_string() } else { format!("{:.0} ms", 600.0 * v * v) };
         let sound_ms = |v: f32| format!("{:.0} ms", 50.0 + 550.0 * v);
         let sound_modes = ["off", "level", "balance"];

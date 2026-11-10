@@ -10,7 +10,7 @@ pub struct DaemonStatus {
     pub effect: String,
     pub brightness: f32,
     pub fps: u32,
-    /// Measured LED frames/sec over the last ~1s window.
+    /// Measured LED frames/sec over the last ~0.5 s window.
     #[serde(default)]
     pub actual_fps: f32,
     pub speed: f32,
@@ -56,7 +56,7 @@ fn default_sensitivity() -> f32 {
     0.3
 }
 
-/// Rolling ~1s frame-rate meter. Call [`tick`] after each successful LED frame.
+/// Rolling ~0.5 s frame-rate meter. Call [`FpsMeter::tick`] after each successful LED frame.
 pub struct FpsMeter {
     window_start: Instant,
     count: u32,

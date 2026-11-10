@@ -6,8 +6,9 @@ export CARGO_TARGET_DIR="${PWD}/target"
 export BINDGEN_EXTRA_CLANG_ARGS="-isystem /usr/lib/gcc/x86_64-redhat-linux/16/include -isystem /usr/include"
 
 FEATURES="${HYPER_SYNC_FEATURES:-full}"
-cargo build --release --features "${FEATURES}" "$@"
-cargo install --path . --force --features "${FEATURES}"
+# One build, pinned to Cargo.lock (`cargo install` re-resolved every dependency and built again).
+cargo build --release --locked --features "${FEATURES}" "$@"
+install -Dm755 target/release/hyper-sync "${HOME}/.cargo/bin/hyper-sync"
 install -Dm755 target/release/hyper-sync "${HOME}/.local/bin/hyper-sync"
 
 # App icon for the menu / autostart entries (Icon=hyper-sync); the tray has it built in.

@@ -15,7 +15,7 @@ Built in gated phases (solid → candle → screen sync → systemd) and extende
 | RGB order | RGB |
 | Data input (LED 0) | **Bottom-right** corner (seated view), counter-clockwise |
 
-At 115200 baud a full frame is ~17 ms on the wire, so **~57 fps** is the ceiling. The controller (model SK0127, answers `Moni-A`) only accepts 115200 — 230400 through 2 Mbaud get no reply.
+At 115200 baud a full frame is ~17 ms on the wire, so **~57 fps** is the ceiling; hyper-sync caps the rate at 55 to stay under it. The controller (model SK0127, answers `Moni-A`) only accepts 115200 — 230400 through 2 Mbaud get no reply.
 
 ## Architecture
 
@@ -58,7 +58,7 @@ One process owns the serial port. TUI and tray are thin IPC clients; legacy subc
 
 ### Daemon & control
 
-- Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`): every setting applies live, also from editors that save by renaming
+- Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`): every setting applies live (except `[device] port`, which needs a daemon restart), also from editors that save by renaming
 - **Unix socket IPC** — `$XDG_RUNTIME_DIR/hyper-sync.sock`, answered at once
 - **`hyper-sync ctl`** — status (plain/JSON), stop, restart, quit, reselect screen, flash, patch settings; invalid values are rejected with a message
 - **Serial reconnect** on USB unplug/replug; a stopped effect is retried every 2 s and `serial_ok` reports a missing strip
@@ -132,12 +132,12 @@ The LEDs go dark while the screen is locked (`org.freedesktop.ScreenSaver`, via 
 ### Screen sync
 
 - **XDG Desktop Portal** screencast via `ashpd` (KDE Plasma 6 / `xdg-desktop-portal-kde`)
-- **Persisted permission** — restore token saved to `~/.config/hyper-sync/restore-token`
+- **Persisted permission** — restore token saved to `~/.config/hyper-sync/restore-token`, kept when a start is cancelled (see [Screen capture permission](#screen-capture-permission))
 - **PipeWire** stream with edge sampling mapped through `config/layout.toml`
 - **Smoothing** (`[screen] smoothing`, default 0 = off): eases between frames (time constant 0.6 s × smoothing²) to calm flicker, at the cost of lag
 - **Gamma** (`[screen] gamma`, default 2.2): screen colors are encoded for monitors, LEDs are linear — without it mid-tones look washed out. `1.0` turns it off.
 - Each LED averages the whole stretch of screen edge up to its neighbours
-- Survives resolution changes; **`R`** in TUI or `ctl reselect-screen` / `--forget-portal` to re-pick monitor
+- Survives resolution changes; **`R`** in TUI or `ctl reselect-screen` / `--forget-portal` to re-pick monitor (the new pick is remembered)
 - NVIDIA offload env vars documented for systemd (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`)
 
 ### Audio-reactive overlay
@@ -156,7 +156,7 @@ With a sound mode on, the music also drives the animation: effects run faster on
 - Captures the **default PipeWire sink monitor** via `parec` (48 kHz stereo F32)
 - **Bass-weighted** boost (~100 Hz low-pass) so kicks pump without treble flicker
 - Soft-knee dynamics + fast-attack envelope
-- **`sound_viz`** effect renders a 16-band spectrum (bass right, mids top, highs left), recomputed every ~5 ms from a rolling window — about four periods per band, so treble reacts in a few ms and bass in ~50 ms
+- **`sound_viz`** effect renders a 16-band spectrum (bass right, mids top, highs left), recomputed every ~5 ms from a rolling window — about four periods per band, so treble reacts in a few ms and bass in ~50 ms; skipped while the input is silent
 - `parec` asks for ~5 ms buffers, which drops PipeWire's cycle from 1024 to ~256 samples while audio is in use
 
 Requires `parec` (PipeWire) on `PATH`.
@@ -212,18 +212,20 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 ./scripts/build.sh
 ```
 
-Builds with all features (`screen`, `daemon`, `tui`, `tray`) and installs to:
+Builds once with all features (`screen`, `daemon`, `tui`, `tray`), pinned to `Cargo.lock` (`--locked`), and installs to:
 
-- `~/.cargo/bin/hyper-sync` and `~/.local/bin/hyper-sync`
+- `~/.cargo/bin/hyper-sync` and `~/.local/bin/hyper-sync` (the same binary)
 - App icon: `~/.local/share/icons/hicolor/{scalable,256x256}/apps/hyper-sync.*` (for the menu and autostart entries; the tray has it built in)
 
 On Fedora, `scripts/build.sh` sets `BINDGEN_EXTRA_CLANG_ARGS` for system headers.
 
-Minimal build (no screen capture):
+Minimal build (daemon only: no screen capture, TUI or tray):
 
 ```bash
-HYPER_SYNC_FEATURES=daemon cargo build --release
+HYPER_SYNC_FEATURES=daemon ./scripts/build.sh
 ```
+
+Every feature set builds without warnings, and so do `cargo clippy --all-targets` and `cargo doc`.
 
 ## Install autostart or service
 
@@ -353,7 +355,9 @@ hyper-sync off    --port /dev/ttyUSB0 --leds 65
 
 ### Screen capture permission
 
-First run opens the portal picker — allow persistence when prompted. Press **`R`** in the TUI (or tray **Screen sync → Choose another screen…**) to clear the saved token and open the picker again. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
+First run opens KDE's screen picker. Click your monitor's tile (not **Share region** or **Share virtual screen** — the resolution there only applies to a new, empty virtual display) and keep **Allow the application to do this without asking next time** ticked. The picker closes itself after 30 s; the daemon then opens it again a few seconds later, up to 12 times.
+
+Press **`R`** in the TUI (or tray **Screen sync → Choose another screen…**) to clear the saved permission and pick again; the new pick is remembered. Switching away while screen sync is starting keeps the saved permission and closes the half-open session. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
 
 ## Protocol
 
@@ -372,8 +376,8 @@ Total: **201 bytes** per frame.
 
 | Metric | Target |
 |--------|--------|
-| Update rate | The set rate is held up to ~57 fps (serial-limited at 115200): measured 45.0 at 45 and 55.1 at 55, for effects and screen sync. The frame loop sleeps only what's left of each interval. |
-| CPU | Daemon ~2.5% of one core in screen sync; TUI ~0.3% idle |
+| Update rate | The set rate is held up to 55 fps, a little under the ~57 the serial line carries at 115200 (writes no longer wait for the wire, so a faster rate would queue frames as lag): measured 45.0 at 45 and 55.1 at 55, for effects and screen sync. The frame loop sleeps only what's left of each interval. |
+| CPU | Daemon ~0.8% of one core running an effect at 55 fps with a sound mode on and nothing playing (`parec` adds ~0.9%); ~2% in screen sync on a mostly still desktop, where KWin adds ~5% to produce the frames. 13 threads. TUI ~0.3% idle |
 | Screen lag | One serial frame (~17 ms) plus up to one frame interval; screen smoothing adds its fade on top |
 | Sound lag | ~30–45 ms from sound to light (estimated from the buffer sizes: ~5 ms PipeWire cycle, fast-attack envelope, frame wait, 17 ms serial) |
 | Robustness | Survives USB replug, PipeWire restarts, config hot-reload, stream resize |
@@ -389,6 +393,7 @@ Total: **201 bytes** per frame.
 | 4 | Systemd user service | Done |
 | + | Daemon, TUI, tray, animated effects, audio overlay | Done |
 | + | Frame pacing, audio spectrum fix, gamma, Hyperion ports, favorites, stats panel, live tray menu, new icon | Done |
+| + | Review: screen-permission and capture-handoff fixes, less CPU and fewer threads, one pinned build, warning-free code | Done |
 
 ## License
 

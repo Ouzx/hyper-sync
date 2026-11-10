@@ -58,6 +58,7 @@ pub fn rgb_to_hsv(rgb: [u8; 3]) -> (f32, f32, f32) {
     (h, s, max)
 }
 
+#[cfg(feature = "tui")]
 pub fn rgb_to_hex(rgb: [u8; 3]) -> String {
     format!("{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
@@ -85,6 +86,7 @@ pub fn scale_rgb(rgb: [u8; 3], brightness: f32) -> [u8; 3] {
     ]
 }
 
+#[cfg(feature = "screen")]
 pub fn scale_rgb_buf(rgb: &mut [u8], brightness: f32) {
     let b = brightness.clamp(0.0, 1.0);
     for c in rgb.iter_mut() {
@@ -109,7 +111,7 @@ pub fn run(
 
     let frame = build_frame(cfg.leds, &rgb)?;
     let mut writer = SerialWriter::new(cfg);
-    let interval = std::time::Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
+    let interval = crate::config::frame_interval(fps);
 
     loop {
         writer.write_frame(&frame)?;

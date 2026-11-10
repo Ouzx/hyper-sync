@@ -378,7 +378,9 @@ fn process_chunk(
     state.history.extend_from_slice(&mono_buf);
     let excess = state.history.len().saturating_sub(WINDOW_MAX);
     state.history.drain(..excess);
-    if !mono_buf.is_empty() {
+    // In silence, once the bars have fallen, there's nothing to analyse (parec still sends zeros).
+    let silent = l_peak.max(r_peak) < 1e-4 && state.spectrum.iter().all(|&v| v < 1e-3);
+    if !mono_buf.is_empty() && !silent {
         let spec_dt = state.last_spectrum.elapsed().as_secs_f32().max(1e-4);
         state.last_spectrum = Instant::now();
         let bands = state.analyzer.analyze(&state.history);

@@ -305,11 +305,9 @@ pub fn run(
                 scale_rgb_buf(&mut rgb, state.brightness);
                 let leds = state.device.borrow().leds;
                 if let Ok(packet) = build_frame(leds, &rgb) {
-                    if state.writer.borrow_mut().write_frame(&packet).is_ok() {
-                        if !*state.got_frame.borrow() {
-                            eprintln!("first frame sent to LEDs");
-                            *state.got_frame.borrow_mut() = true;
-                        }
+                    if state.writer.borrow_mut().write_frame(&packet).is_ok() && !*state.got_frame.borrow() {
+                        eprintln!("first frame sent to LEDs");
+                        *state.got_frame.borrow_mut() = true;
                     }
                 }
                 *state.last_frame.borrow_mut() = now;
@@ -381,13 +379,15 @@ pub(crate) async fn open_portal_session(
         eprintln!("portal: requesting screen capture permission…");
     }
 
+    let cancelled = || cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
     match open_portal_session_inner(monitor, saved_token.clone(), cancel.clone()).await {
         Ok(session) => Ok(session),
-        Err(e) if saved_token.is_some() => {
+        // A restore we cancelled didn't fail: keep the saved permission.
+        Err(e) if saved_token.is_some() && !cancelled() => {
             eprintln!("portal: restore failed ({e:#}), clearing token and re-prompting…");
             config::clear_portal_token()?;
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            if cancelled() {
                 anyhow::bail!("portal open cancelled");
             }
             open_portal_session_inner(monitor, None, cancel).await
@@ -438,76 +438,87 @@ async fn open_portal_session_inner(
     )
     .await?;
 
-    bail_if_cancelled!();
-    eprintln!("portal: select_sources");
-    let saved_token_ref = saved_token.as_deref();
-    portal_step(
-        &cancel,
-        TokioDuration::from_secs(60),
-        "select_sources",
-        async {
-            proxy
-                .select_sources(
-                    &session,
-                    CursorMode::Embedded,
-                    SourceType::Monitor.into(),
-                    false,
-                    saved_token_ref,
-                    PersistMode::ExplicitlyRevoked,
-                )
-                .await?
-                .response()
-                .map_err(ashpd::Error::from)
-        },
-    )
-    .await?;
+    let opened: anyhow::Result<(ashpd::desktop::screencast::Stream, std::os::fd::OwnedFd)> = async {
+        bail_if_cancelled!();
+        eprintln!("portal: select_sources");
+        let saved_token_ref = saved_token.as_deref();
+        portal_step(
+            &cancel,
+            TokioDuration::from_secs(60),
+            "select_sources",
+            async {
+                proxy
+                    .select_sources(
+                        &session,
+                        CursorMode::Embedded,
+                        SourceType::Monitor.into(),
+                        false,
+                        saved_token_ref,
+                        PersistMode::ExplicitlyRevoked,
+                    )
+                    .await?
+                    .response()
+            },
+        )
+        .await?;
 
-    bail_if_cancelled!();
-    eprintln!("portal: start");
-    let response = portal_step(
-        &cancel,
-        TokioDuration::from_secs(30),
-        "start",
-        async {
-            proxy
-                .start(&session, &WindowIdentifier::default())
-                .await?
-                .response()
-                .map_err(ashpd::Error::from)
-        },
-    )
-    .await?;
+        bail_if_cancelled!();
+        eprintln!("portal: start");
+        let response = portal_step(
+            &cancel,
+            TokioDuration::from_secs(30),
+            "start",
+            async {
+                proxy
+                    .start(&session, &WindowIdentifier::default())
+                    .await?
+                    .response()
+            },
+        )
+        .await?;
 
-    bail_if_cancelled!();
-    if let Some(token) = response.restore_token() {
-        config::save_portal_token(token)?;
-        if saved_token.is_some() {
-            eprintln!("portal: session restored");
-        } else {
-            eprintln!("portal: permission saved");
+        // Save before honouring a cancel: once started, the portal may have replaced the old token.
+        if let Some(token) = response.restore_token() {
+            config::save_portal_token(token)?;
+            if saved_token.is_some() {
+                eprintln!("portal: session restored");
+            } else {
+                eprintln!("portal: permission saved");
+            }
+        }
+        bail_if_cancelled!();
+
+        let streams = response.streams();
+        let stream = streams
+            .get(monitor as usize)
+            .or_else(|| streams.first())
+            .context("no screencast stream returned")?
+            .to_owned();
+
+        bail_if_cancelled!();
+        eprintln!("portal: open_pipe_wire_remote");
+        let fd = portal_step(
+            &cancel,
+            TokioDuration::from_secs(15),
+            "open_pipe_wire_remote",
+            proxy.open_pipe_wire_remote(&session),
+        )
+        .await?;
+
+        eprintln!("portal: ready (node {})", stream.pipe_wire_node_id());
+        Ok((stream, fd))
+    }
+    .await;
+
+    match opened {
+        Ok((stream, fd)) => Ok((stream, fd, session, proxy)),
+        Err(e) => {
+            // Close what we opened (failed, cancelled or the picker dismissed): otherwise the
+            // portal keeps the session, and any stream it started, until the daemon exits.
+            let _ = tokio::time::timeout(TokioDuration::from_secs(2), session.close()).await;
+            Err(e)
         }
     }
-
-    let streams = response.streams();
-    let stream = streams
-        .get(monitor as usize)
-        .or_else(|| streams.first())
-        .context("no screencast stream returned")?
-        .to_owned();
-
-    bail_if_cancelled!();
-    eprintln!("portal: open_pipe_wire_remote");
-    let fd = portal_step(
-        &cancel,
-        TokioDuration::from_secs(15),
-        "open_pipe_wire_remote",
-        proxy.open_pipe_wire_remote(&session),
-    )
-    .await?;
-
-    eprintln!("portal: ready (node {})", stream.pipe_wire_node_id());
-
-    Ok((stream, fd, session, proxy))
 }
 
 async fn wait_cancelled(cancel: Option<Arc<AtomicBool>>) {

@@ -139,6 +139,7 @@ enum CtlAction {
         brightness: Option<f32>,
         #[arg(long)]
         color: Option<String>,
+        /// Frames per second, 1 to 55 (the serial line's limit)
         #[arg(long)]
         fps: Option<u32>,
         #[arg(long)]

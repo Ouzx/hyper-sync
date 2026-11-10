@@ -8,6 +8,14 @@ pub const DEFAULT_PORT: &str = "/dev/ttyUSB0";
 pub const DEFAULT_BAUD: u32 = 115_200;
 pub const DEFAULT_LEDS: u8 = 65;
 pub const DEFAULT_FPS: u32 = 30;
+/// A frame takes 17.4 ms on the wire at 115200 baud (~57 fps). Writes don't wait for the wire,
+/// so the rate stays a little under it; above it, frames would pile up in the tty buffer as lag.
+pub const MAX_FPS: u32 = 55;
+
+/// Time between frames at `fps`, capped at MAX_FPS.
+pub fn frame_interval(fps: u32) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(1.0 / f64::from(fps.clamp(1, MAX_FPS)))
+}
 
 /// What config.toml held the last time it matched the daemon's config, so the file watcher
 /// can tell a user's edit apart from our own saves.
@@ -29,6 +37,7 @@ pub fn runtime_config_path() -> PathBuf {
 }
 
 /// Favorite effect ids, one per line (written by the TUI, read by the tray menu too).
+#[cfg(any(feature = "tui", feature = "tray"))]
 pub fn favorites_path() -> PathBuf {
     config_dir().join("favorites")
 }
@@ -47,7 +56,7 @@ pub fn ipc_socket_path() -> PathBuf {
     cache.join("hyper-sync.sock")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectMode {
     Off,
@@ -104,6 +113,7 @@ pub enum EffectMode {
     CinemaBrighten,
     CinemaDim,
     SoundViz,
+    #[default]
     Screen,
     ScreenCenter,
 }
@@ -166,9 +176,10 @@ impl EffectMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SoundMode {
+    #[default]
     Off,
     Level,
     Balance,
@@ -181,18 +192,6 @@ impl SoundMode {
             Self::Level => "level",
             Self::Balance => "balance",
         }
-    }
-}
-
-impl Default for SoundMode {
-    fn default() -> Self {
-        Self::Off
-    }
-}
-
-impl Default for EffectMode {
-    fn default() -> Self {
-        Self::Screen
     }
 }
 
@@ -513,7 +512,7 @@ pub fn resolve_layout_path(path: &Path) -> PathBuf {
             }
         }
     }
-    let in_config = config_dir().join(path.file_name().unwrap_or_else(|| path.as_os_str()));
+    let in_config = config_dir().join(path.file_name().unwrap_or(path.as_os_str()));
     if in_config.exists() {
         return in_config;
     }

@@ -28,7 +28,7 @@ pub(crate) enum ReloadMsg {
     ReselectScreen,
 }
 
-pub fn run(with_tray: bool) -> anyhow::Result<()> {
+pub fn run(#[cfg_attr(not(feature = "tray"), allow(unused_variables))] with_tray: bool) -> anyhow::Result<()> {
     eprintln!("hyper-sync daemon starting…");
 
     // Flock first — beats the IPC race when launching twice from the KDE menu.

@@ -28,7 +28,7 @@ mod tests {
 
     #[test]
     fn header_for_65_leds() {
-        let frame = build_frame(65, &vec![0u8; 195]).unwrap();
+        let frame = build_frame(65, &[0u8; 195]).unwrap();
         assert_eq!(&frame[..6], &[0x41, 0x64, 0x61, 0x00, 0x00, 0x41]);
         assert_eq!(frame.len(), 201);
     }

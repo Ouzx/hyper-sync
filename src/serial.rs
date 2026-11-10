@@ -24,7 +24,9 @@ impl SerialWriter {
             }
 
             let port = self.port.as_mut().unwrap();
-            match port.write_all(frame).and_then(|()| port.flush()) {
+            // No flush: waiting for the wire (tcdrain) woke the thread ~8 times a frame. Callers
+            // pace frames at no more than MAX_FPS, so the tty buffer never fills.
+            match port.write_all(frame) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     eprintln!("serial write failed: {e}, reconnecting...");
