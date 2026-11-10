@@ -60,6 +60,10 @@ pub enum EffectMode {
     Segment,
     Strobe,
     Wipe,
+    Flow,
+    Lava,
+    Lightning,
+    Sunrise,
     #[serde(rename = "sound_viz")]
     SoundViz,
     Screen,
@@ -85,6 +89,10 @@ impl EffectMode {
             Self::Segment => "segment",
             Self::Strobe => "strobe",
             Self::Wipe => "wipe",
+            Self::Flow => "flow",
+            Self::Lava => "lava",
+            Self::Lightning => "lightning",
+            Self::Sunrise => "sunrise",
             Self::SoundViz => "sound_viz",
             Self::Screen => "screen",
             Self::ScreenCenter => "screen_center",
@@ -197,6 +205,14 @@ pub struct ScreenSection {
     pub layout: String,
     #[serde(default)]
     pub forget_portal: bool,
+    /// Screen colors are encoded for monitors; LEDs are linear. 2.2 matches the screen, 1.0 = off.
+    #[serde(default = "default_gamma")]
+    pub gamma: f32,
+}
+
+#[cfg(feature = "screen")]
+fn default_gamma() -> f32 {
+    2.2
 }
 
 fn default_port() -> String {
@@ -257,6 +273,7 @@ impl Default for RuntimeConfig {
                 monitor: 0,
                 layout: default_layout(),
                 forget_portal: false,
+                gamma: default_gamma(),
             },
         }
     }
@@ -341,6 +358,10 @@ impl RuntimeConfig {
             EffectMode::Segment => "segment".into(),
             EffectMode::Strobe => "strobe".into(),
             EffectMode::Wipe => "wipe".into(),
+            EffectMode::Flow => "flow".into(),
+            EffectMode::Lava => "lava".into(),
+            EffectMode::Lightning => "lightning".into(),
+            EffectMode::Sunrise => "sunrise".into(),
             EffectMode::SoundViz => "sound_viz".into(),
             #[cfg(feature = "screen")]
             EffectMode::Screen | EffectMode::ScreenCenter => {
@@ -490,6 +511,8 @@ pub struct Segment {
 pub struct EdgeZone {
     pub cx: f32,
     pub cy: f32,
+    /// Half the gap to the neighbouring LED, as a fraction of the edge length.
+    pub span: f32,
     pub edge: String,
 }
 
@@ -517,6 +540,7 @@ impl LayoutConfig {
                 zones.push(EdgeZone {
                     cx,
                     cy,
+                    span: 0.5 / (n.max(2) - 1) as f32,
                     edge: seg.edge.clone(),
                 });
             }

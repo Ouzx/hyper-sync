@@ -1,125 +1,48 @@
 use std::f32::consts::TAU;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::time::{Duration, Instant};
 
-use crate::config::{EffectMode, RuntimeConfig};
-use crate::daemon::{DaemonStatus, FpsMeter};
-use crate::config::DeviceConfig;
-use crate::effects::solid::{is_rainbow_color, resolve_pixel_color, scale_rgb};
-use crate::protocol::build_frame;
+use crate::config::{DeviceConfig, EffectMode, RuntimeConfig};
+use crate::daemon::DaemonStatus;
+use crate::effects::solid::resolve_pixel_color;
+use crate::effects::{noise, Ctx};
 use crate::serial::SerialWriter;
 
-#[cfg(feature = "audio")]
-use crate::audio::{maybe_modulate, AudioSnapshot};
+/// Candle-flame amber; `warmth` blends the accent color toward it.
+const AMBER: [f32; 3] = [255.0, 147.0, 41.0];
 
+/// Standalone `hyper-sync candle` (no daemon).
 pub fn run(cfg: DeviceConfig, warmth: f32, speed: f32, fps: u32) -> anyhow::Result<()> {
-    let n = usize::from(cfg.leds);
-    let mut flicker: Vec<f32> = vec![1.0; n];
-    let mut writer = SerialWriter::new(cfg.clone());
-    let interval = std::time::Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
-    let start = Instant::now();
-    let warmth = warmth.clamp(0.0, 1.0);
-    let speed = speed.max(0.1);
-
-    // warm orange base, shifted toward white as warmth drops
-    let base = [
-        255.0,
-        80.0 + 120.0 * warmth,
-        10.0 + 40.0 * (1.0 - warmth),
-    ];
-
-    loop {
-        let t = start.elapsed().as_secs_f32() * speed;
-        let breathe = 0.85 + 0.15 * (t * 0.3 * TAU).sin();
-
-        let mut rgb = Vec::with_capacity(n * 3);
-        for i in 0..n {
-            // low-pass flicker per LED
-            let target = 0.88 + rand_unit(i, t) * 0.24;
-            flicker[i] = flicker[i] * 0.82 + target * 0.18;
-            let gain = breathe * flicker[i];
-
-            rgb.push((base[0] * gain).min(255.0) as u8);
-            rgb.push((base[1] * gain).min(255.0) as u8);
-            rgb.push((base[2] * gain).min(255.0) as u8);
-        }
-
-        let frame = build_frame(cfg.leds, &rgb)?;
-        writer.write_frame(&frame)?;
-        std::thread::sleep(interval);
-    }
-}
-
-pub fn run_controlled(
-    writer: Arc<Mutex<SerialWriter>>,
-    config: Arc<RwLock<RuntimeConfig>>,
-    cancel: Arc<AtomicBool>,
-    status: Arc<Mutex<DaemonStatus>>,
-    preview: Arc<Mutex<Vec<u8>>>,
-    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
-) -> anyhow::Result<()> {
-    let n = config.read().unwrap().device.leds as usize;
-    let mut flicker: Vec<f32> = vec![1.0; n];
-    let mut fps_meter = FpsMeter::new();
-    let start = Instant::now();
-
-    while !cancel.load(Ordering::Relaxed)
-        && config.read().unwrap().effect.mode == EffectMode::Candle
-    {
-        let cfg = config.read().unwrap().clone();
-        let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
-        let warmth = cfg.candle.warmth.clamp(0.0, 1.0);
-        let speed = cfg.effect.speed.max(0.1);
-        let accent = cfg.solid.color.as_str();
-        let warmth_gain = 0.35 + 0.65 * warmth;
-        let t = start.elapsed().as_secs_f32() * speed;
-        let breathe = 0.85 + 0.15 * (t * 0.3 * TAU).sin();
-        let mut rgb = Vec::with_capacity(n * 3);
-        for i in 0..n {
-            let pixel = resolve_pixel_color(i, n, accent);
-            let warm = if is_rainbow_color(accent) {
-                pixel
-            } else {
-                scale_rgb(pixel, warmth_gain)
-            };
-            let base = [warm[0] as f32, warm[1] as f32, warm[2] as f32];
-            let target = 0.88 + rand_unit(i, t) * 0.24;
-            flicker[i] = flicker[i] * 0.82 + target * 0.18;
-            let gain = breathe * flicker[i] * cfg.effect.brightness;
-            rgb.push((base[0] * gain).min(255.0) as u8);
-            rgb.push((base[1] * gain).min(255.0) as u8);
-            rgb.push((base[2] * gain).min(255.0) as u8);
-        }
+    let mut rc = RuntimeConfig::default();
+    rc.device.port = cfg.port.clone();
+    rc.device.leds = cfg.leds;
+    rc.effect.mode = EffectMode::Candle;
+    rc.effect.brightness = 1.0;
+    rc.effect.fps = fps;
+    rc.effect.speed = speed;
+    rc.solid.color = "ff5032".into();
+    rc.candle.warmth = warmth;
+    super::run(
+        EffectMode::Candle,
+        Arc::new(Mutex::new(SerialWriter::new(cfg))),
+        Arc::new(RwLock::new(rc)),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(Mutex::new(DaemonStatus::default())),
         #[cfg(feature = "audio")]
-        maybe_modulate(&mut rgb, n, &cfg, &audio);
-        let frame = build_frame(cfg.device.leds, &rgb)?;
-        writer.lock().unwrap().write_frame(&frame)?;
-        *preview.lock().unwrap() = rgb.clone();
-        let actual = fps_meter.tick();
-        {
-            let mut st = status.lock().unwrap();
-            st.brightness = cfg.effect.brightness;
-            st.fps = cfg.effect.fps;
-            st.actual_fps = actual;
-            st.speed = cfg.effect.speed;
-            st.serial_ok = true;
-            st.detail = "candle".into();
-            st.color = cfg.solid.color.clone();
-            #[cfg(feature = "audio")]
-            {
-                st.audio_level = audio.level();
-            }
-        }
-        thread::sleep(interval);
-    }
-    Ok(())
+        Arc::new(crate::audio::AudioSnapshot::new()),
+    )
 }
 
-// ponytail: deterministic pseudo-random — no rand crate for one effect
-fn rand_unit(seed: usize, t: f32) -> f32 {
-    let x = (seed as u32).wrapping_mul(374761393) ^ (t.to_bits());
-    let x = x.wrapping_mul(668265263);
-    (x as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+pub fn render(c: &mut Ctx) -> Vec<u8> {
+    let warmth = c.cfg.candle.warmth.clamp(0.0, 1.0);
+    let breathe = 0.85 + 0.15 * (c.t * 0.3 * TAU).sin();
+    (0..c.n)
+        .flat_map(|i| {
+            let accent = resolve_pixel_color(i, c.n, &c.cfg.solid.color);
+            let gain = breathe * (0.78 + 0.22 * noise(i as u32, c.t * 7.0));
+            std::array::from_fn::<u8, 3, _>(|k| {
+                ((f32::from(accent[k]) * (1.0 - warmth) + AMBER[k] * warmth) * gain) as u8
+            })
+        })
+        .collect()
 }

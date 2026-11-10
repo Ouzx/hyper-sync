@@ -127,6 +127,12 @@ enum CtlAction {
     Quit,
     /// Clear saved screen-capture permission (re-prompt next time screen sync starts)
     ReselectScreen,
+    /// Blink a color over the current effect, e.g. `ctl flash 00ff00 --count 3`
+    Flash {
+        color: String,
+        #[arg(long, default_value_t = 3)]
+        count: u32,
+    },
     Set {
         #[arg(long)]
         mode: Option<String>,
@@ -332,6 +338,10 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
         }
         CtlAction::Quit => {
             ipc_request(&IpcRequest::Quit)?;
+            Ok(())
+        }
+        CtlAction::Flash { color, count } => {
+            ipc_request(&IpcRequest::Flash { color, count })?;
             Ok(())
         }
         CtlAction::Set {

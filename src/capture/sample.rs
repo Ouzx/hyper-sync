@@ -1,7 +1,10 @@
 use pipewire::spa::buffer::Data;
 use pipewire::spa::param::video::VideoFormat;
 
+use super::negotiate::bytes_per_pixel;
 use crate::config::EdgeZone;
+
+type Rect = (i32, i32, i32, i32);
 
 pub fn sample_edges(
     datas: &mut [Data],
@@ -10,137 +13,11 @@ pub fn sample_edges(
     height: u32,
     zones: &[EdgeZone],
 ) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(zones.len() * 3);
     let depth = ((width.min(height) as f32) * 0.03).clamp(16.0, 96.0) as i32;
-
-    for zone in zones {
-        let [r, g, b] = if format == VideoFormat::NV12 || format == VideoFormat::NV21 {
-            avg_nv12(datas, width, height, depth, zone)
-        } else {
-            let Some((frame, stride)) = raw_plane(datas, format, width) else {
-                rgb.extend_from_slice(&[0, 0, 0]);
-                continue;
-            };
-            avg_raw(frame, stride, format, width, height, depth, zone)
-        };
-        rgb.extend_from_slice(&[r, g, b]);
-    }
-
-    rgb
-}
-
-fn raw_plane(datas: &mut [Data], format: VideoFormat, width: u32) -> Option<(&[u8], usize)> {
-    let bpp = super::negotiate::bytes_per_pixel(format);
-    let data = datas.first_mut()?;
-    let stride = data
-        .chunk()
-        .stride()
-        .unsigned_abs()
-        .max(width * bpp) as usize;
-    let offset = data.chunk().offset() as usize;
-    let size = data.chunk().size() as usize;
-    let frame = data.data()?;
-    let end = (offset + size).min(frame.len());
-    if end <= offset {
-        return None;
-    }
-    Some((&frame[offset..end], stride))
-}
-
-fn avg_raw(
-    frame: &[u8],
-    stride: usize,
-    format: VideoFormat,
-    width: u32,
-    height: u32,
-    depth: i32,
-    zone: &EdgeZone,
-) -> [u8; 3] {
-    let bpp = super::negotiate::bytes_per_pixel(format) as usize;
-    let (x0, y0, x1, y1) = zone_rect(width, height, depth, zone);
-    let mut r = 0u64;
-    let mut g = 0u64;
-    let mut b = 0u64;
-    let mut n = 0u64;
-
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let offset = y as usize * stride + x as usize * bpp;
-            if offset + bpp > frame.len() {
-                continue;
-            }
-            let px = read_pixel(frame, offset, format);
-            r += u64::from(px[0]);
-            g += u64::from(px[1]);
-            b += u64::from(px[2]);
-            n += 1;
-        }
-    }
-
-    if n == 0 {
-        return [0, 0, 0];
-    }
-    [(r / n) as u8, (g / n) as u8, (b / n) as u8]
-}
-
-fn avg_nv12(
-    datas: &mut [Data],
-    width: u32,
-    height: u32,
-    depth: i32,
-    zone: &EdgeZone,
-) -> [u8; 3] {
-    if datas.len() < 2 {
-        return [0, 0, 0];
-    }
-    let (y_plane, uv_planes) = datas.split_at_mut(1);
-    let y_stride = y_plane[0]
-        .chunk()
-        .stride()
-        .unsigned_abs()
-        .max(width) as usize;
-    let uv_stride = uv_planes[0]
-        .chunk()
-        .stride()
-        .unsigned_abs()
-        .max(width) as usize;
-    let Some(y) = y_plane[0].data() else {
-        return [0, 0, 0];
-    };
-    let Some(uv) = uv_planes[0].data() else {
-        return [0, 0, 0];
-    };
-
-    let (x0, y0, x1, y1) = zone_rect(width, height, depth, zone);
-    let mut r = 0u64;
-    let mut g = 0u64;
-    let mut b = 0u64;
-    let mut n = 0u64;
-
-    for row in y0..y1 {
-        for col in x0..x1 {
-            let yo = row as usize * y_stride + col as usize;
-            if yo >= y.len() {
-                continue;
-            }
-            let uv_x = (col as usize / 2) * 2;
-            let uv_y = row as usize / 2;
-            let uvo = uv_y * uv_stride + uv_x;
-            if uvo + 1 >= uv.len() {
-                continue;
-            }
-            let px = yuv_to_rgb(y[yo], uv[uvo], uv[uvo + 1]);
-            r += u64::from(px[0]);
-            g += u64::from(px[1]);
-            b += u64::from(px[2]);
-            n += 1;
-        }
-    }
-
-    if n == 0 {
-        return [0, 0, 0];
-    }
-    [(r / n) as u8, (g / n) as u8, (b / n) as u8]
+    zones
+        .iter()
+        .flat_map(|z| avg_rect(datas, format, width, zone_rect(width, height, depth, z), 2))
+        .collect()
 }
 
 /// Average the center region and replicate to every LED (movie-style ambient).
@@ -151,138 +28,101 @@ pub fn sample_center(
     height: u32,
     leds: u8,
 ) -> Vec<u8> {
-    let [r, g, b] = avg_center(datas, format, width, height);
-    vec![r, g, b].repeat(usize::from(leds))
+    let (w, h) = (width as i32, height as i32);
+    let (mx, my) = ((w as f32 * 0.275) as i32, (h as f32 * 0.275) as i32);
+    // A color average doesn't need every pixel of a 1152×648 area — every 4th each way is plenty.
+    avg_rect(datas, format, width, (mx, my, w - mx, h - my), 4).repeat(usize::from(leds))
 }
 
-fn avg_center(
+fn stride(data: &Data, min: u32) -> usize {
+    data.chunk().stride().unsigned_abs().max(min) as usize
+}
+
+fn avg_rect(
     datas: &mut [Data],
     format: VideoFormat,
     width: u32,
-    height: u32,
+    (x0, y0, x1, y1): Rect,
+    step: usize,
 ) -> [u8; 3] {
-    let w = width as i32;
-    let h = height as i32;
-    let mx = (w as f32 * 0.275) as i32;
-    let my = (h as f32 * 0.275) as i32;
-    let x0 = mx;
-    let y0 = my;
-    let x1 = w - mx;
-    let y1 = h - my;
+    let mut sum = [0u64; 3];
+    let mut n = 0u64;
+    let mut add = |px: [u8; 3]| {
+        for (s, c) in sum.iter_mut().zip(px) {
+            *s += u64::from(c);
+        }
+        n += 1;
+    };
+
     if format == VideoFormat::NV12 || format == VideoFormat::NV21 {
-        avg_nv12_center(datas, width, height, x0, y0, x1, y1)
+        if datas.len() < 2 {
+            return [0, 0, 0];
+        }
+        let (y_plane, uv_plane) = datas.split_at_mut(1);
+        let (y_stride, uv_stride) = (stride(&y_plane[0], width), stride(&uv_plane[0], width));
+        let (Some(y), Some(uv)) = (y_plane[0].data(), uv_plane[0].data()) else {
+            return [0, 0, 0];
+        };
+        for row in (y0..y1).step_by(step) {
+            for col in (x0..x1).step_by(step) {
+                let (row, col) = (row as usize, col as usize);
+                let yo = row * y_stride + col;
+                let uvo = row / 2 * uv_stride + col / 2 * 2;
+                if yo < y.len() && uvo + 1 < uv.len() {
+                    add(yuv_to_rgb(y[yo], uv[uvo], uv[uvo + 1]));
+                }
+            }
+        }
     } else {
         let Some((frame, stride)) = raw_plane(datas, format, width) else {
             return [0, 0, 0];
         };
-        avg_raw_rect(frame, stride, format, x0, y0, x1, y1)
-    }
-}
-
-fn avg_raw_rect(
-    frame: &[u8],
-    stride: usize,
-    format: VideoFormat,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-) -> [u8; 3] {
-    let bpp = super::negotiate::bytes_per_pixel(format) as usize;
-    let mut r = 0u64;
-    let mut g = 0u64;
-    let mut b = 0u64;
-    let mut n = 0u64;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let offset = y as usize * stride + x as usize * bpp;
-            if offset + bpp > frame.len() {
-                continue;
+        let bpp = bytes_per_pixel(format) as usize;
+        for row in (y0..y1).step_by(step) {
+            for col in (x0..x1).step_by(step) {
+                let offset = row as usize * stride + col as usize * bpp;
+                if offset + bpp <= frame.len() {
+                    add(read_pixel(frame, offset, format));
+                }
             }
-            let px = read_pixel(frame, offset, format);
-            r += u64::from(px[0]);
-            g += u64::from(px[1]);
-            b += u64::from(px[2]);
-            n += 1;
         }
     }
+
     if n == 0 {
         return [0, 0, 0];
     }
-    [(r / n) as u8, (g / n) as u8, (b / n) as u8]
+    sum.map(|s| (s / n) as u8)
 }
 
-fn avg_nv12_center(
-    datas: &mut [Data],
-    width: u32,
-    _height: u32,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-) -> [u8; 3] {
-    if datas.len() < 2 {
-        return [0, 0, 0];
+fn raw_plane(datas: &mut [Data], format: VideoFormat, width: u32) -> Option<(&[u8], usize)> {
+    let data = datas.first_mut()?;
+    let stride = stride(data, width * bytes_per_pixel(format));
+    let offset = data.chunk().offset() as usize;
+    let size = data.chunk().size() as usize;
+    let frame = data.data()?;
+    let end = (offset + size).min(frame.len());
+    if end <= offset {
+        return None;
     }
-    let (y_plane, uv_planes) = datas.split_at_mut(1);
-    let y_stride = y_plane[0]
-        .chunk()
-        .stride()
-        .unsigned_abs()
-        .max(width) as usize;
-    let uv_stride = uv_planes[0]
-        .chunk()
-        .stride()
-        .unsigned_abs()
-        .max(width) as usize;
-    let Some(y) = y_plane[0].data() else {
-        return [0, 0, 0];
-    };
-    let Some(uv) = uv_planes[0].data() else {
-        return [0, 0, 0];
-    };
-    let mut r = 0u64;
-    let mut g = 0u64;
-    let mut b = 0u64;
-    let mut n = 0u64;
-    for row in y0..y1 {
-        for col in x0..x1 {
-            let yo = row as usize * y_stride + col as usize;
-            if yo >= y.len() {
-                continue;
-            }
-            let uv_x = (col as usize / 2) * 2;
-            let uv_y = row as usize / 2;
-            let uvo = uv_y * uv_stride + uv_x;
-            if uvo + 1 >= uv.len() {
-                continue;
-            }
-            let px = yuv_to_rgb(y[yo], uv[uvo], uv[uvo + 1]);
-            r += u64::from(px[0]);
-            g += u64::from(px[1]);
-            b += u64::from(px[2]);
-            n += 1;
-        }
-    }
-    if n == 0 {
-        return [0, 0, 0];
-    }
-    [(r / n) as u8, (g / n) as u8, (b / n) as u8]
+    Some((&frame[offset..end], stride))
 }
 
-fn zone_rect(width: u32, height: u32, depth: i32, zone: &EdgeZone) -> (i32, i32, i32, i32) {
-    let w = width as i32;
-    let h = height as i32;
+fn zone_rect(width: u32, height: u32, depth: i32, zone: &EdgeZone) -> Rect {
+    let (w, h) = (width as i32, height as i32);
     let cx = (zone.cx * (w - 1) as f32).round() as i32;
     let cy = (zone.cy * (h - 1) as f32).round() as i32;
-    let half = (depth / 2).max(4);
+    // Cover the whole stretch of edge up to the neighbouring LEDs, not just a small square.
+    let along = |len: i32| ((zone.span * len as f32).ceil() as i32).max(depth / 2).max(4);
 
     match zone.edge.as_str() {
-        "right" => (w - depth, (cy - half).max(0), w, (cy + half).min(h)),
-        "left" => (0, (cy - half).max(0), depth, (cy + half).min(h)),
-        "top" => ((cx - half).max(0), 0, (cx + half).min(w), depth),
-        "bottom" => ((cx - half).max(0), h - depth, (cx + half).min(w), h),
-        _ => ((cx - half).max(0), (cy - half).max(0), (cx + half).min(w), (cy + half).min(h)),
+        "right" => (w - depth, (cy - along(h)).max(0), w, (cy + along(h)).min(h)),
+        "left" => (0, (cy - along(h)).max(0), depth, (cy + along(h)).min(h)),
+        "top" => ((cx - along(w)).max(0), 0, (cx + along(w)).min(w), depth),
+        "bottom" => ((cx - along(w)).max(0), h - depth, (cx + along(w)).min(w), h),
+        _ => {
+            let half = (depth / 2).max(4);
+            ((cx - half).max(0), (cy - half).max(0), (cx + half).min(w), (cy + half).min(h))
+        }
     }
 }
 

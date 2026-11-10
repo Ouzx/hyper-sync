@@ -15,7 +15,7 @@ Built in gated phases (solid → candle → screen sync → systemd) and extende
 | RGB order | RGB |
 | Data input (LED 0) | **Bottom-right** corner (seated view), counter-clockwise |
 
-At 115200 baud a full frame is ~17 ms on the wire, so **~30 fps** is the practical ceiling unless firmware accepts higher baud (unlikely on CH340).
+At 115200 baud a full frame is ~17 ms on the wire, so **~57 fps** is the ceiling. The controller (model SK0127, answers `Moni-A`) only accepts 115200 — 230400 through 2 Mbaud get no reply.
 
 ## Architecture
 
@@ -73,27 +73,37 @@ One process owns the serial port. TUI and tray are thin IPC clients; legacy subc
 | `screen` | Screen edge colors (portal + PipeWire) |
 | `screen_center` | Screen sync sampled from center-weighted regions |
 | `solid` | Uniform color (hex or `rainbow`) |
-| `candle` | Warm flicker + slow breathe |
-| `chase` | Moving dot around the strip |
+| `candle` | Flicker + slow breathe; `warmth` blends the color toward candle amber |
+| `chase` | Comet with a fading tail, one lap per 2 s |
 | `wave` | Sine wave along the strip |
 | `scanner` | Back-and-forth highlight |
-| `sparkle` | Random twinkles |
-| `pulse` | Global brightness pulse |
+| `sparkle` | Random sparks that fade out |
+| `pulse` | Smooth breathing |
 | `aurora` | Soft color drift |
-| `fire` | Flame-like animation |
+| `fire` | Flames rising up both sides (fixed heat palette) |
 | `heartbeat` | Double-pulse rhythm |
 | `segment` | Per-segment blocks (right / top / left) |
 | `strobe` | Hard on/off flash |
 | `wipe` | Color wipe around the strip |
+| `flow` | Rainbow drifting around the strip |
+| `lava` | Slow organic blobs of the color (rainbow drifts through hues) |
+| `lightning` | Random strikes with bursts of re-strikes |
+| `sunrise` | Dark → red → warm daylight over 10 min at speed 1 (2 min at speed 5) |
 | `sound_viz` | Frequency-band visualization driven by audio |
 
-Shared controls: **brightness**, **speed**, **FPS** (24/30/45/60), **color** presets + rainbow.
+Shared controls: **brightness**, **speed**, **FPS** (24/30/45/55), **color** presets + rainbow.
+
+The LEDs go dark while the screen is locked (`org.freedesktop.ScreenSaver`, via `gdbus`) and come back on unlock.
+
+`hyper-sync ctl flash 00ff00 --count 3` blinks a color over whatever is running — handy from scripts and hooks. In screen sync it only shows while the screen is updating.
 
 ### Screen sync
 
 - **XDG Desktop Portal** screencast via `ashpd` (KDE Plasma 6 / `xdg-desktop-portal-kde`)
 - **Persisted permission** — restore token saved to `~/.config/hyper-sync/restore-token`
 - **PipeWire** stream with edge sampling mapped through `config/layout.toml`
+- **Gamma** (`[screen] gamma`, default 2.2): screen colors are encoded for monitors, LEDs are linear — without it mid-tones look washed out. `1.0` turns it off.
+- Each LED averages the whole stretch of screen edge up to its neighbours
 - Survives resolution changes; **`R`** in TUI or `ctl reselect-screen` / `--forget-portal` to re-pick monitor
 - NVIDIA offload env vars documented for systemd (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`)
 
@@ -109,8 +119,9 @@ Works on top of any effect (not just `sound_viz`):
 
 - Captures the **default PipeWire sink monitor** via `parec` (48 kHz stereo F32)
 - **Bass-weighted** boost (~100 Hz low-pass) so kicks pump without treble flicker
-- Soft-knee dynamics + envelope for a smooth ~30 fps feel on the LEDs
-- **`sound_viz`** effect renders a multi-band spectrum on the strip
+- Soft-knee dynamics + fast-attack envelope
+- **`sound_viz`** effect renders a 16-band spectrum (bass right, mids top, highs left), recomputed every ~5 ms from a rolling window — about four periods per band, so treble reacts in a few ms and bass in ~50 ms
+- `parec` asks for ~5 ms buffers, which drops PipeWire's cycle from 1024 to ~256 samples while audio is in use
 
 Requires `parec` (PipeWire) on `PATH`.
 
@@ -243,6 +254,7 @@ warmth = 0.9
 [screen]
 monitor = 0
 layout = "config/layout.toml"
+gamma = 2.2          # 1.0 = off
 
 [audio]
 sound_mode = "off"   # off | level | balance
@@ -269,6 +281,7 @@ hyper-sync daemon [--no-tray]
 hyper-sync tui
 hyper-sync ctl status [--json]
 hyper-sync ctl stop | restart | quit | reselect-screen
+hyper-sync ctl flash 00ff00 [--count 3]
 hyper-sync ctl set --mode screen --brightness 0.2 --fps 30 --speed 1.5 --color ff3300
 hyper-sync install app | service
 hyper-sync uninstall app | service
@@ -305,7 +318,7 @@ Total: **201 bytes** per frame.
 
 | Metric | Target |
 |--------|--------|
-| Update rate | ~30 fps sustained (serial-limited at 115200) |
+| Update rate | Up to ~57 fps (serial-limited at 115200); the frame loop sleeps only what's left of each interval |
 | Capture + sample | Low CPU; work stays in capture worker thread |
 | Perceived lag | ~20–35 ms (dominated by serial frame time) |
 | Robustness | Survives USB replug, config hot-reload, stream resize |

@@ -1,16 +1,6 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::time::Duration;
-
-use crate::config::{EffectMode, RuntimeConfig};
-use crate::daemon::{DaemonStatus, FpsMeter};
 use crate::config::DeviceConfig;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
-
-#[cfg(feature = "audio")]
-use crate::audio::{maybe_modulate, AudioSnapshot};
 
 pub fn parse_color(hex: &str) -> anyhow::Result<[u8; 3]> {
     let s = hex.trim_start_matches('#');
@@ -110,56 +100,8 @@ pub fn run_off(cfg: DeviceConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn run_controlled(
-    writer: Arc<Mutex<SerialWriter>>,
-    config: Arc<RwLock<RuntimeConfig>>,
-    cancel: Arc<AtomicBool>,
-    status: Arc<Mutex<DaemonStatus>>,
-    _preview: Arc<Mutex<Vec<u8>>>,
-    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
-) -> anyhow::Result<()> {
-    let mut fps_meter = FpsMeter::new();
-    while !cancel.load(Ordering::Relaxed)
-        && config.read().unwrap().effect.mode == EffectMode::Solid
-    {
-        let cfg = config.read().unwrap().clone();
-        let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
-        let n = usize::from(cfg.device.leds);
-        let rgb: Vec<u8> = if is_rainbow_color(&cfg.solid.color) {
-            (0..n)
-                .flat_map(|i| {
-                    scale_rgb(rainbow_pixel(i, n), cfg.effect.brightness).into_iter()
-                })
-                .collect()
-        } else {
-            let color = parse_color(&cfg.solid.color)?;
-            let scaled = scale_rgb(color, cfg.effect.brightness);
-            scaled.iter().cycle().take(n * 3).copied().collect()
-        };
-        let mut rgb = rgb;
-        #[cfg(feature = "audio")]
-        maybe_modulate(&mut rgb, n, &cfg, &audio);
-        let frame = build_frame(cfg.device.leds, &rgb)?;
-        writer.lock().unwrap().write_frame(&frame)?;
-        let actual = fps_meter.tick();
-        {
-            let mut st = status.lock().unwrap();
-            st.brightness = cfg.effect.brightness;
-            st.fps = cfg.effect.fps;
-            st.actual_fps = actual;
-            st.serial_ok = true;
-            st.detail = if is_rainbow_color(&cfg.solid.color) {
-                "rainbow".into()
-            } else {
-                format!("#{}", cfg.solid.color)
-            };
-            st.color = cfg.solid.color.clone();
-            #[cfg(feature = "audio")]
-            {
-                st.audio_level = audio.level();
-            }
-        }
-        thread::sleep(interval);
-    }
-    Ok(())
+pub fn render(c: &mut crate::effects::Ctx) -> Vec<u8> {
+    (0..c.n)
+        .flat_map(|i| resolve_pixel_color(i, c.n, &c.cfg.solid.color))
+        .collect()
 }

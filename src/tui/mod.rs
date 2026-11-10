@@ -35,13 +35,18 @@ const MODES: &[&str] = &[
     "segment",
     "strobe",
     "wipe",
+    "flow",
+    "lava",
+    "lightning",
+    "sunrise",
     "sound_viz",
 ];
 const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "rainbow",
 ];
-const FPS_PRESETS: &[u32] = &[24, 30, 45, 60];
+// 201-byte frames at 115200 baud (the only rate the Skydimo accepts) cap out near 57 fps.
+const FPS_PRESETS: &[u32] = &[24, 30, 45, 55];
 const SPEED_MIN: f32 = 0.1;
 const SPEED_MAX: f32 = 5.0;
 
@@ -771,6 +776,10 @@ fn mode_label(mode: &str) -> String {
         "segment" => "Segment".into(),
         "strobe" => "Strobe".into(),
         "wipe" => "Wipe".into(),
+        "flow" => "Rainbow Flow".into(),
+        "lava" => "Lava".into(),
+        "lightning" => "Lightning".into(),
+        "sunrise" => "Sunrise".into(),
         "sound_viz" => "Sound Viz".into(),
         _ => mode.into(),
     }
@@ -800,7 +809,7 @@ fn uses_speed(effect: &str) -> bool {
 }
 
 fn uses_accent_color(effect: &str) -> bool {
-    effect != "off" && !is_screen_sync(effect)
+    !matches!(effect, "off" | "fire" | "flow" | "sunrise") && !is_screen_sync(effect)
 }
 
 fn color_picker_enabled(effect: &str) -> bool {

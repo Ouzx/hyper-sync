@@ -27,6 +27,8 @@ pub enum IpcRequest {
     Quit,
     /// Clear saved portal token; re-prompt on next screen capture start.
     ReselectScreen,
+    /// Blink a color over whatever is running (notifications, build results).
+    Flash { color: String, count: u32 },
     Set { config: RuntimeConfig },
     Patch {
         mode: Option<String>,
@@ -189,6 +191,10 @@ fn handle_client(
                 error: None,
             }
         }
+        IpcRequest::Flash { color, count } => {
+            crate::effects::flash(parse_color(&color)?, count);
+            IpcResponse { ok: true, status: None, error: None }
+        }
         IpcRequest::Quit => {
             shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
             IpcResponse {
@@ -324,6 +330,10 @@ fn parse_mode(s: &str) -> anyhow::Result<crate::config::EffectMode> {
         "segment" => EffectMode::Segment,
         "strobe" => EffectMode::Strobe,
         "wipe" => EffectMode::Wipe,
+        "flow" => EffectMode::Flow,
+        "lava" => EffectMode::Lava,
+        "lightning" => EffectMode::Lightning,
+        "sunrise" => EffectMode::Sunrise,
         "sound_viz" => EffectMode::SoundViz,
         "screen" => EffectMode::Screen,
         "screen_center" => EffectMode::ScreenCenter,

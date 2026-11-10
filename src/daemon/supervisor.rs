@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, EffectMode, RuntimeConfig};
 use crate::daemon::DaemonStatus;
-use crate::effects::solid;
 use crate::protocol::black_frame;
 use crate::serial::SerialWriter;
 
@@ -189,7 +188,6 @@ impl Supervisor {
         let config = Arc::clone(&self.config);
         let status = Arc::clone(&self.status);
         let writer = Arc::clone(&self.writer);
-        let preview = Arc::new(Mutex::new(Vec::new()));
         #[cfg(feature = "audio")]
         let audio = Arc::clone(&self.audio);
 
@@ -199,43 +197,8 @@ impl Supervisor {
         self.handle = Some(thread::spawn(move || {
             let result = match mode {
                 EffectMode::Off => run_off(&writer, &config, &cancel),
-                EffectMode::Solid | EffectMode::Rainbow => solid::run_controlled(
-                    writer,
-                    config,
-                    cancel,
-                    status,
-                    preview,
-                    #[cfg(feature = "audio")]
-                    audio,
-                ),
-                EffectMode::Candle => crate::effects::candle::run_controlled(
-                    writer,
-                    config,
-                    cancel,
-                    status,
-                    preview,
-                    #[cfg(feature = "audio")]
-                    audio,
-                ),
-                EffectMode::SoundViz => crate::effects::sound_viz::run_controlled(
-                    writer,
-                    config,
-                    cancel,
-                    status,
-                    #[cfg(feature = "audio")]
-                    audio,
-                ),
-                EffectMode::Chase
-                | EffectMode::Wave
-                | EffectMode::Scanner
-                | EffectMode::Sparkle
-                | EffectMode::Pulse
-                | EffectMode::Aurora
-                | EffectMode::Fire
-                | EffectMode::Heartbeat
-                | EffectMode::Segment
-                | EffectMode::Strobe
-                | EffectMode::Wipe => crate::effects::animated::run_controlled(
+                EffectMode::Screen | EffectMode::ScreenCenter => unreachable!("screen uses worker"),
+                _ => crate::effects::run(
                     mode,
                     writer,
                     config,
@@ -244,9 +207,6 @@ impl Supervisor {
                     #[cfg(feature = "audio")]
                     audio,
                 ),
-                EffectMode::Screen | EffectMode::ScreenCenter => {
-                    unreachable!("screen uses worker")
-                }
             };
             if let Err(e) = result {
                 let open = writer_err.lock().unwrap().is_open();

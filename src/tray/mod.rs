@@ -90,6 +90,8 @@ impl Tray for HyperTray {
                             patch_item("Pulse", "pulse"),
                             patch_item("Aurora", "aurora"),
                             patch_item("Fire", "fire"),
+                            patch_item("Lava", "lava"),
+                            patch_item("Sunrise", "sunrise"),
                         ],
                         ..Default::default()
                     }),
@@ -104,6 +106,8 @@ impl Tray for HyperTray {
                             patch_item("Segment", "segment"),
                             patch_item("Strobe", "strobe"),
                             patch_item("Wipe", "wipe"),
+                            patch_item("Rainbow Flow", "flow"),
+                            patch_item("Lightning", "lightning"),
                             patch_item("Sound Viz", "sound_viz"),
                         ],
                         ..Default::default()

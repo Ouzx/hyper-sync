@@ -1,268 +1,186 @@
 use std::f32::consts::TAU;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::time::{Duration, Instant};
 
-use crate::config::{EffectMode, RuntimeConfig};
-use crate::daemon::{DaemonStatus, FpsMeter};
-use crate::effects::solid::{resolve_pixel_color, scale_rgb};
-use crate::layout::segment_bounds;
-use crate::protocol::build_frame;
-use crate::serial::SerialWriter;
+use crate::config::EffectMode;
+use crate::effects::solid::{hsv_to_rgb, is_rainbow_color, resolve_pixel_color};
+use crate::effects::{hash, noise, Ctx};
+use crate::layout::{height, segment_bounds};
 
-#[cfg(feature = "audio")]
-use crate::audio::{maybe_modulate, AudioSnapshot};
+pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
+    let (n, t, dt) = (c.n, c.t, c.dt);
+    let nf = n as f32;
+    let accent = c.cfg.solid.color.as_str();
+    let color = |i: usize| resolve_pixel_color(i, n, accent);
 
-pub fn run_controlled(
-    mode: EffectMode,
-    writer: Arc<Mutex<SerialWriter>>,
-    config: Arc<RwLock<RuntimeConfig>>,
-    cancel: Arc<AtomicBool>,
-    status: Arc<Mutex<DaemonStatus>>,
-    #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
-) -> anyhow::Result<()> {
-    let n = config.read().unwrap().device.leds as usize;
-    let mut fire_flicker = vec![1.0f32; n];
-    let mut fps_meter = FpsMeter::new();
-    let start = Instant::now();
-
-    while !cancel.load(Ordering::Relaxed) {
-        let cfg = config.read().unwrap().clone();
-        if cfg.effect.mode != mode {
-            break;
-        }
-
-        let interval = Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
-        let speed = cfg.effect.speed.max(0.1);
-        let t = start.elapsed().as_secs_f32() * speed;
-        let accent = cfg.solid.color.as_str();
-        let mut rgb = render_frame(
-            mode,
-            n,
-            t,
-            accent,
-            cfg.effect.brightness,
-            &mut fire_flicker,
-        );
-        #[cfg(feature = "audio")]
-        maybe_modulate(&mut rgb, n, &cfg, &audio);
-        let frame = build_frame(cfg.device.leds, &rgb)?;
-        writer.lock().unwrap().write_frame(&frame)?;
-        let actual = fps_meter.tick();
-        {
-            let mut st = status.lock().unwrap();
-            st.brightness = cfg.effect.brightness;
-            st.fps = cfg.effect.fps;
-            st.actual_fps = actual;
-            st.speed = cfg.effect.speed;
-            st.serial_ok = true;
-            st.detail = mode.as_str().into();
-            st.color = cfg.solid.color.clone();
-            #[cfg(feature = "audio")]
-            {
-                st.audio_level = audio.level();
+    // Effects with memory update it once per frame, before drawing.
+    match mode {
+        EffectMode::Sparkle => {
+            for (i, level) in c.mem.iter_mut().enumerate() {
+                *level *= (-dt * 4.0).exp();
+                if hash(i as u32, c.frame) < dt * 0.4 {
+                    *level = 1.0;
+                }
             }
         }
-        thread::sleep(interval);
+        EffectMode::Lightning => {
+            let lit = c.mem.iter().copied().fold(0.0, f32::max) > 0.3;
+            for level in c.mem.iter_mut() {
+                *level *= (-dt * 9.0).exp();
+            }
+            // Rare strikes, then a burst of re-strikes while the sky is still lit.
+            if hash(u32::MAX, c.frame) < dt * if lit { 8.0 } else { 0.4 } {
+                let center = hash(1, c.frame) * nf;
+                let half = 3.0 + hash(2, c.frame) * 8.0;
+                let level = 0.6 + 0.4 * hash(3, c.frame);
+                for (i, l) in c.mem.iter_mut().enumerate() {
+                    if (i as f32 - center).abs() <= half {
+                        *l = l.max(level);
+                    }
+                }
+            }
+        }
+        _ => {}
     }
-    Ok(())
-}
 
-fn render_frame(
-    mode: EffectMode,
-    n: usize,
-    t: f32,
-    accent: &str,
-    brightness: f32,
-    fire_flicker: &mut [f32],
-) -> Vec<u8> {
-    let rgb = match mode {
-        EffectMode::Chase => render_chase(n, t, accent),
-        EffectMode::Wave => render_wave(n, t, accent),
-        EffectMode::Scanner => render_scanner(n, t, accent),
-        EffectMode::Sparkle => render_sparkle(n, t, accent),
-        EffectMode::Pulse => render_pulse(n, t, accent),
-        EffectMode::Aurora => render_aurora(n, t, accent),
-        EffectMode::Fire => render_fire(n, t, accent, fire_flicker),
-        EffectMode::Heartbeat => render_heartbeat(n, t, accent),
-        EffectMode::Segment => render_segment(n, t, accent),
-        EffectMode::Strobe => render_strobe(n, t, accent),
-        EffectMode::Wipe => render_wipe(n, t, accent),
-        _ => vec![0; n * 3],
-    };
-    apply_brightness(&rgb, brightness)
-}
-
-fn apply_brightness(rgb: &[u8], brightness: f32) -> Vec<u8> {
-    let b = brightness.clamp(0.0, 1.0);
-    rgb.iter()
-        .map(|c| (f32::from(*c) * b) as u8)
-        .collect()
-}
-
-fn dist_loop(i: usize, pos: f32, n: usize) -> f32 {
-    let d = (i as f32 - pos).abs();
-    let n = n as f32;
-    d.min(n - d)
-}
-
-fn set_pixel(rgb: &mut [u8], i: usize, color: [u8; 3], gain: f32) {
-    let g = gain.clamp(0.0, 1.0);
-    let base = i * 3;
-    if base + 2 < rgb.len() {
-        rgb[base] = (f32::from(color[0]) * g) as u8;
-        rgb[base + 1] = (f32::from(color[1]) * g) as u8;
-        rgb[base + 2] = (f32::from(color[2]) * g) as u8;
-    }
-}
-
-fn render_chase(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    let pos = t.rem_euclid(n as f32);
-    let tail = 8.0f32;
+    let mut rgb = Vec::with_capacity(n * 3);
     for i in 0..n {
-        let d = dist_loop(i, pos, n);
-        let gain = ((1.0 - d / tail).max(0.0)).powi(2);
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
-}
-
-fn render_wave(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    for i in 0..n {
-        let phase = i as f32 / n as f32 - t;
-        let gain = 0.35 + 0.65 * (phase * TAU).sin().max(0.0);
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
-}
-
-fn render_scanner(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    let phase = (t * 0.5).fract() * 2.0;
-    let u = if phase <= 1.0 { phase } else { 2.0 - phase };
-    let pos = u * (n.saturating_sub(1) as f32);
-    for i in 0..n {
-        let d = (i as f32 - pos).abs();
-        let gain = (1.0 - d / 3.0).max(0.0);
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
-}
-
-fn render_sparkle(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    for i in 0..n {
-        let spark = rand_unit(i, t);
-        let gain = if spark > 0.92 { (spark - 0.92) / 0.08 } else { 0.0 };
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
-}
-
-fn render_pulse(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let gain = 0.3 + 0.7 * (t * TAU).sin().max(0.0);
-    let mut rgb = vec![0u8; n * 3];
-    for i in 0..n {
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
-}
-
-fn render_aurora(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    let accent_hue = crate::effects::solid::hsv_to_rgb((t * 0.05).fract(), 0.6, 1.0);
-    for i in 0..n {
-        let base = resolve_pixel_color(i, n, accent);
-        let x = i as f32 / n as f32;
-        let w1 = 0.5 + 0.5 * (x * 3.0 + t * 0.4).sin();
-        let w2 = 0.5 + 0.5 * (x * 5.0 - t * 0.3).sin();
-        let blend = (w1 + w2) * 0.5;
-        let mixed = [
-            ((f32::from(base[0]) * (1.0 - blend) + f32::from(accent_hue[0]) * blend) as u8),
-            ((f32::from(base[1]) * (1.0 - blend) + f32::from(accent_hue[1]) * blend) as u8),
-            ((f32::from(base[2]) * (1.0 - blend) + f32::from(accent_hue[2]) * blend) as u8),
-        ];
-        let gain = 0.4 + 0.6 * (x * 2.0 + t * 0.2).sin().max(0.0);
-        set_pixel(&mut rgb, i, mixed, gain);
-    }
-    rgb
-}
-
-fn render_fire(n: usize, t: f32, accent: &str, flicker: &mut [f32]) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    let bounds = segment_bounds(n);
-    let top_start = bounds[1].0;
-    for i in 0..n {
-        let warm = scale_rgb(resolve_pixel_color(i, n, accent), 1.0);
-        let height = if i >= top_start {
-            1.0
-        } else if i >= bounds[0].1 {
-            0.6 + 0.4 * (i - bounds[0].1) as f32 / (top_start - bounds[0].1).max(1) as f32
-        } else {
-            0.3 + 0.3 * i as f32 / bounds[0].1.max(1) as f32
+        let x = i as f32 / nf;
+        let px = match mode {
+            // A comet: one lap every 2 s at speed 1, tail fading behind the head.
+            EffectMode::Chase => {
+                let behind = ((t * 0.5).fract() * nf - i as f32).rem_euclid(nf);
+                scale(color(i), (1.0 - behind / 10.0).max(0.0).powi(2))
+            }
+            EffectMode::Wave => {
+                scale(color(i), 0.35 + 0.65 * (0.5 + 0.5 * ((x - t) * TAU).sin()))
+            }
+            EffectMode::Scanner => {
+                let phase = (t * 0.5).fract() * 2.0;
+                let u = if phase <= 1.0 { phase } else { 2.0 - phase };
+                let d = (i as f32 - u * (nf - 1.0)).abs();
+                scale(color(i), (1.0 - d / 3.0).max(0.0))
+            }
+            EffectMode::Sparkle => scale(color(i), c.mem[i] * c.mem[i]),
+            EffectMode::Pulse => scale(color(i), 0.3 + 0.7 * (0.5 - 0.5 * (t * TAU).cos())),
+            EffectMode::Aurora => {
+                let hue = hsv_to_rgb((t * 0.05).fract(), 0.6, 1.0);
+                let base = color(i);
+                let w1 = 0.5 + 0.5 * (x * 3.0 + t * 0.4).sin();
+                let w2 = 0.5 + 0.5 * (x * 5.0 - t * 0.3).sin();
+                let blend = (w1 + w2) * 0.5;
+                let mixed = std::array::from_fn(|k| {
+                    (f32::from(base[k]) * (1.0 - blend) + f32::from(hue[k]) * blend) as u8
+                });
+                scale(mixed, 0.4 + 0.6 * (x * 2.0 + t * 0.2).sin().max(0.0))
+            }
+            // Flames rise from the bottom of both sides; neighbours share flicker so it moves in tongues.
+            EffectMode::Fire => {
+                let fl = |j: usize| noise(j as u32, t * 5.0);
+                let flick = 0.5 * fl(i) + 0.25 * (fl(i.wrapping_sub(1)) + fl(i + 1));
+                let heat = (1.0 - 0.8 * height(i, n)) * (0.5 + 0.5 * flick) * 0.9;
+                heat_color(heat)
+            }
+            // Lub-dub: two soft bumps per beat, one beat per second at speed 1.
+            EffectMode::Heartbeat => {
+                let b = t.fract();
+                let bump = |at: f32, w: f32| (-((b - at) / w).powi(2)).exp();
+                scale(color(i), 0.12 + 0.88 * bump(0.08, 0.05) + 0.55 * bump(0.32, 0.06))
+            }
+            EffectMode::Segment => {
+                let (start, end) = segment_bounds(n)[(t.floor() as usize) % 3];
+                scale(color(i), if (start..end).contains(&i) { 1.0 } else { 0.0 })
+            }
+            EffectMode::Strobe => scale(color(i), if (t * 4.0).fract() < 0.5 { 1.0 } else { 0.0 }),
+            EffectMode::Wipe => {
+                let fill = (t.fract() * nf).ceil() as usize;
+                scale(color(i), if i < fill { 1.0 } else { 0.0 })
+            }
+            // A rainbow drifting around the strip, one lap every 4 s at speed 1.
+            EffectMode::Flow => hsv_to_rgb((x - t * 0.25).rem_euclid(1.0), 1.0, 1.0),
+            // Slow organic blobs of the accent color; rainbow accent drifts through hues.
+            EffectMode::Lava => {
+                let w = 0.5
+                    + 0.25 * (TAU * (x * 1.5 + t * 0.07)).sin()
+                    + 0.25 * (TAU * (x * 2.5 - t * 0.05) + 1.7).sin();
+                let base = if is_rainbow_color(accent) {
+                    let hue = x * 0.5 + t * 0.02 + 0.1 * (TAU * (x + t * 0.03)).sin();
+                    hsv_to_rgb(hue.rem_euclid(1.0), 1.0, 1.0)
+                } else {
+                    color(i)
+                };
+                scale(base, 0.15 + 0.85 * w * w)
+            }
+            EffectMode::Lightning => scale(color(i), c.mem[i]),
+            // Ten minutes from dark to warm daylight at speed 1; the sides light before the top.
+            EffectMode::Sunrise => {
+                let p = (t / 600.0).min(1.0);
+                sunrise_color((p * 1.6 - height(i, n) * 0.6).clamp(0.0, 1.0))
+            }
+            _ => [0, 0, 0],
         };
-        let target = 0.85 + rand_unit(i, t) * 0.3;
-        flicker[i] = flicker[i] * 0.8 + target * 0.2;
-        let gain = flicker[i] * height;
-        set_pixel(&mut rgb, i, warm, gain);
+        rgb.extend_from_slice(&px);
     }
     rgb
 }
 
-fn render_heartbeat(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let beat = t.fract();
-    let gain = if beat < 0.12 {
-        1.0
-    } else if beat < 0.2 {
-        0.35
-    } else if beat < 0.32 {
-        0.85
-    } else {
-        0.15 + 0.1 * (beat * TAU * 2.0).sin().max(0.0)
-    };
-    let mut rgb = vec![0u8; n * 3];
-    for i in 0..n {
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
+fn scale(color: [u8; 3], gain: f32) -> [u8; 3] {
+    let g = gain.clamp(0.0, 1.0);
+    color.map(|c| (f32::from(c) * g) as u8)
 }
 
-fn render_segment(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    let bounds = segment_bounds(n);
-    let active = (t.floor() as usize) % 3;
-    let (start, end) = bounds[active];
-    for i in start..end.min(n) {
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), 1.0);
-    }
-    rgb
+/// Black → red → yellow → white as heat goes 0 → 1.
+fn heat_color(heat: f32) -> [u8; 3] {
+    let h = heat.clamp(0.0, 1.0) * 3.0;
+    [h, h - 1.0, h - 2.0].map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
-fn render_strobe(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let on = (t * 4.0).fract() < 0.5;
-    let gain = if on { 1.0 } else { 0.0 };
-    let mut rgb = vec![0u8; n * 3];
-    for i in 0..n {
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), gain);
-    }
-    rgb
+fn sunrise_color(p: f32) -> [u8; 3] {
+    const STOPS: [(f32, [f32; 3]); 5] = [
+        (0.0, [0.0, 0.0, 0.0]),
+        (0.25, [90.0, 5.0, 0.0]),
+        (0.5, [255.0, 60.0, 0.0]),
+        (0.75, [255.0, 130.0, 30.0]),
+        (1.0, [255.0, 200.0, 140.0]),
+    ];
+    let k = STOPS.iter().position(|s| s.0 >= p).unwrap_or(STOPS.len() - 1).max(1);
+    let ((p0, a), (p1, b)) = (STOPS[k - 1], STOPS[k]);
+    let f = ((p - p0) / (p1 - p0)).clamp(0.0, 1.0);
+    std::array::from_fn(|j| (a[j] + (b[j] - a[j]) * f) as u8)
 }
 
-fn render_wipe(n: usize, t: f32, accent: &str) -> Vec<u8> {
-    let mut rgb = vec![0u8; n * 3];
-    let progress = t.fract();
-    let fill = (progress * n as f32).ceil() as usize;
-    for i in 0..fill.min(n) {
-        set_pixel(&mut rgb, i, resolve_pixel_color(i, n, accent), 1.0);
-    }
-    rgb
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RuntimeConfig;
 
-fn rand_unit(seed: usize, t: f32) -> f32 {
-    let x = (seed as u32).wrapping_mul(374761393) ^ (t.to_bits());
-    let x = x.wrapping_mul(668265263);
-    (x as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    fn frames(mode: EffectMode, count: u32) -> Vec<Vec<u8>> {
+        let cfg = RuntimeConfig::default();
+        let audio = crate::audio::AudioSnapshot::new();
+        let mut mem = vec![0.0; 65];
+        (1..=count)
+            .map(|frame| {
+                let t = frame as f32 * 0.02;
+                render(mode, &mut Ctx { n: 65, t, dt: 0.02, frame, cfg: &cfg, mem: &mut mem, audio: &audio })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_effect_renders_full_frames() {
+        use EffectMode::*;
+        for mode in [Chase, Wave, Scanner, Sparkle, Pulse, Aurora, Fire, Heartbeat, Segment, Strobe, Wipe, Flow, Lava, Lightning, Sunrise] {
+            let out = frames(mode, 3000);
+            assert!(out.iter().all(|f| f.len() == 65 * 3), "{mode:?}");
+            assert!(out.iter().any(|f| f.iter().any(|&c| c > 0)), "{mode:?} never lights up");
+        }
+    }
+
+    #[test]
+    fn fire_burns_the_same_on_both_sides() {
+        let sum = |f: &[u8], r: std::ops::Range<usize>| f[r.start * 3..r.end * 3].iter().map(|&c| c as u32).sum::<u32>();
+        let (right, left) = frames(EffectMode::Fire, 500)
+            .iter()
+            .fold((0, 0), |(r, l), f| (r + sum(f, 0..17), l + sum(f, 48..65)));
+        let ratio = right as f32 / left as f32;
+        assert!((0.9..1.1).contains(&ratio), "right/left = {ratio}");
+    }
 }

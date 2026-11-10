@@ -19,12 +19,12 @@ use crate::capture::screen::{open_portal_session, wait_for_graphical_session, wa
 use crate::capture::negotiate;
 use crate::config::{self, EffectMode, LayoutConfig, RuntimeConfig};
 use crate::daemon::{DaemonStatus, FpsMeter};
-use crate::effects::solid::scale_rgb_buf;
+use crate::effects::finish;
 use crate::protocol::build_frame;
 use crate::serial::SerialWriter;
 
 #[cfg(feature = "audio")]
-use crate::audio::{maybe_modulate, AudioSnapshot};
+use crate::audio::AudioSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
@@ -557,8 +557,11 @@ fn run_capture(
                 let mode = cfg.effect.mode;
                 let min_interval =
                     Duration::from_micros(1_000_000 / u64::from(cfg.effect.fps.max(1)));
+                // Frames arrive at the monitor's refresh rate; take one per interval, keeping the
+                // schedule (not the arrival time) so small lateness doesn't lower the frame rate.
                 let now = Instant::now();
-                if now.duration_since(*state.last_frame.borrow()) < min_interval {
+                let due = *state.last_frame.borrow() + min_interval;
+                if now < due {
                     return;
                 }
 
@@ -579,11 +582,8 @@ fn run_capture(
                     }
                     _ => sample::sample_edges(datas, format, width, height, &state.zones),
                 };
-                scale_rgb_buf(&mut rgb, cfg.effect.brightness);
+                finish(&mut rgb, &cfg, cfg.screen.gamma, #[cfg(feature = "audio")] &state.audio);
                 let leds = cfg.device.leds;
-                let n = usize::from(leds);
-                #[cfg(feature = "audio")]
-                maybe_modulate(&mut rgb, n, &cfg, &state.audio);
                 drop(cfg);
 
                 if let Ok(packet) = build_frame(leds, &rgb) {
@@ -609,7 +609,7 @@ fn run_capture(
                         state.status.lock().unwrap().serial_ok = false;
                     }
                 }
-                *state.last_frame.borrow_mut() = now;
+                *state.last_frame.borrow_mut() = if now - due < min_interval { due } else { now };
             }
         })
         .register()
