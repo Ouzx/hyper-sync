@@ -73,25 +73,30 @@ One process owns the serial port. TUI and tray are thin IPC clients; legacy subc
 | `screen` | Screen edge colors (portal + PipeWire) |
 | `screen_center` | Screen sync sampled from center-weighted regions |
 | `solid` | Uniform color (hex or `rainbow`) |
-| `candle` | Flicker + slow breathe; `warmth` blends the color toward candle amber |
+| `candle` | One shared flame flicker with occasional gusts that dip and redden; `warmth` blends the color toward candle amber |
+| `fire` | Red at the bottom, orange toward the top; tongues of flame climb both sides |
+| `lava` | Wax blobs rising up both sides and meeting at the top |
+| `mood` | Five color blobs circling the strip, hues ±30° around the color |
+| `aurora` | Curtains drifting both ways with a shimmer (green → teal → violet with `rainbow`) |
+| `ocean` | Sea waves rolling in from beyond the top-right corner, in ocean blues |
+| `pulse` | Slow breathing, one breath per 3 s |
+| `flow` | Rainbow drifting around the strip, one lap per 8 s |
+| `swirl` | Three arms rotating around the middle of the screen |
+| `plasma` | Overlapping sine fields drifting over the screen |
+| `wave` | Two soft waves rolling around the strip |
 | `chase` | Comet with a fading tail, one lap per 2 s |
-| `wave` | Sine wave along the strip |
 | `scanner` | Back-and-forth highlight |
+| `juggle` | Four dots weaving back and forth, leaving trails |
+| `collision` | Two comets meet at the top and burst |
 | `sparkle` | Random sparks that fade out |
-| `pulse` | Smooth breathing |
-| `aurora` | Soft color drift |
-| `fire` | Flames rising up both sides (fixed heat palette) |
-| `heartbeat` | Double-pulse rhythm |
-| `segment` | Per-segment blocks (right / top / left) |
-| `strobe` | Hard on/off flash |
-| `wipe` | Color wipe around the strip |
-| `flow` | Rainbow drifting around the strip |
-| `lava` | Slow organic blobs of the color (rainbow drifts through hues) |
 | `lightning` | Random strikes with bursts of re-strikes |
-| `sunrise` | Dark → red → warm daylight over 10 min at speed 1 (2 min at speed 5) |
+| `segment` | Per-segment blocks (right / top / left) |
+| `clock` | Hour (blue), minute (green) and second (red) hands; 12 o'clock is the middle of the top |
 | `sound_viz` | Frequency-band visualization driven by audio |
 
-Shared controls: **brightness**, **speed**, **FPS** (24/30/45/55), **color** presets + rainbow.
+Mood blobs, swirl, plasma, ocean (Seawaves), juggle, collision and clock are our own takes on effects that ship with [Hyperion.ng](https://github.com/hyperion-project/hyperion.ng) (MIT). `heartbeat`, `strobe`, `wipe` and `sunrise` were removed; a config naming them loads as pulse, pulse, chase and candle.
+
+Shared controls: **brightness**, **speed**, **power** (how strongly effects dim, flicker and contrast: 0 = steady, 50% = as designed, 100% = twice that), **FPS** (24/30/45/55), **color** presets + rainbow.
 
 The LEDs go dark while the screen is locked (`org.freedesktop.ScreenSaver`, via `gdbus`) and come back on unlock.
 
@@ -102,6 +107,7 @@ The LEDs go dark while the screen is locked (`org.freedesktop.ScreenSaver`, via 
 - **XDG Desktop Portal** screencast via `ashpd` (KDE Plasma 6 / `xdg-desktop-portal-kde`)
 - **Persisted permission** — restore token saved to `~/.config/hyper-sync/restore-token`
 - **PipeWire** stream with edge sampling mapped through `config/layout.toml`
+- **Smoothing** (`[screen] smoothing`, default 0 = off): eases between frames (time constant 0.6 s × smoothing²) to calm flicker, at the cost of lag
 - **Gamma** (`[screen] gamma`, default 2.2): screen colors are encoded for monitors, LEDs are linear — without it mid-tones look washed out. `1.0` turns it off.
 - Each LED averages the whole stretch of screen edge up to its neighbours
 - Survives resolution changes; **`R`** in TUI or `ctl reselect-screen` / `--forget-portal` to re-pick monitor
@@ -113,9 +119,12 @@ Works on top of any effect (not just `sound_viz`):
 
 | Setting | Description |
 |---------|-------------|
-| **Sound mode** | `off` · `level` (uniform boost) · `balance` (pan-weighted zones) |
-| **Audio boost** | How much bass-driven brightness rises toward full at peaks |
-| **Sensitivity** | Input drive, envelope speed, and shaping (tuned for music/games) |
+| **Sound mode** | `off` · `level` (whole strip) · `balance` (pan-weighted zones) |
+| **Reaction** (`reactivity`) | How strongly the lights follow the music: quiet passages dim to as low as 30% of your brightness, peaks lift toward 100% |
+| **Sensitivity** | Input drive and shaping (how strongly quiet sounds register) |
+| **Smoothing** (`[audio] smoothing`) | How slowly the reaction falls back: 0 = snappy (50 ms), 1 = smooth (600 ms) |
+
+With a sound mode on, the music also drives the animation: effects run faster on beats.
 
 - Captures the **default PipeWire sink monitor** via `parec` (48 kHz stereo F32)
 - **Bass-weighted** boost (~100 Hz low-pass) so kicks pump without treble flicker
@@ -129,21 +138,24 @@ Requires `parec` (PipeWire) on `PATH`.
 
 Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running. Fits 80×24; **`?`** lists every key.
 
-**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, with the effect, frame rate and connection status inside) · controls with their keys (left) · numbered effects (right). Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
+**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, every 5th LED numbered, with the effect, frame rate and connection status inside; in screen sync it shades the part of the screen being sampled) · controls with their keys (left) · numbered effects (right). Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓`, `Enter` | Browse effects — the one under the cursor starts when you pause; `Enter` starts it now |
-| `1`–`21` | Jump to an effect by number |
+| `1`–`24` | Jump to an effect by number |
 | `w` / `s` | Brightness up / down |
 | `a` / `d` | Speed down / up |
+| `z` / `x` | Power down / up |
 | `-` / `=` | Cycle FPS preset |
 | `←` / `→` | Cycle color preset |
 | `c` | Custom color dial |
 | `[` / `]` | Candle warmth · screen-sync gamma |
+| `{` / `}` | Screen-sync smoothing |
 | `Tab` | Cycle sound mode |
-| `j` / `k` | Audio boost down / up |
+| `j` / `k` | Sound reaction down / up |
 | `h` / `l` | Sensitivity down / up |
+| `,` / `.` | Sound smoothing down / up |
 | `R` | Reselect screen capture |
 | `Ctrl+R` | Restart daemon effect |
 | `q` / `Esc` / `Ctrl+C` | Detach TUI |
@@ -245,6 +257,7 @@ mode = "screen"
 brightness = 0.15
 fps = 30
 speed = 1.0
+power = 0.5          # 0 = steady, 0.5 = as designed, 1 = strongest
 
 [solid]
 color = "rainbow"
@@ -256,11 +269,13 @@ warmth = 0.9
 monitor = 0
 layout = "config/layout.toml"
 gamma = 2.2          # 1.0 = off
+smoothing = 0.0      # 0 = off, 1 ≈ 0.6 s fade
 
 [audio]
 sound_mode = "off"   # off | level | balance
-reactivity = 0.3     # audio boost
+reactivity = 0.3     # how strongly the lights follow the music
 sensitivity = 0.3
+smoothing = 0.15     # how slowly the reaction falls back
 ```
 
 ### LED layout
@@ -284,7 +299,7 @@ hyper-sync ctl status [--json]
 hyper-sync ctl stop | restart | quit | reselect-screen
 hyper-sync ctl flash 00ff00 [--count 3]
 hyper-sync ctl set --mode screen --brightness 0.2 --fps 30 --speed 1.5 --color ff3300
-hyper-sync ctl set --warmth 0.8 --gamma 2.0
+hyper-sync ctl set --warmth 0.8 --gamma 2.0 --power 0.4 --smoothing 0.3 --audio-smoothing 0.2
 hyper-sync install app | service
 hyper-sync uninstall app | service
 ```

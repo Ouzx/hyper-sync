@@ -25,6 +25,22 @@ pub fn height(i: usize, n: usize) -> f32 {
     }
 }
 
+/// Monitor width / height.
+pub const ASPECT: f32 = 16.0 / 9.0;
+
+/// Where an LED sits around the monitor: x in 0..ASPECT (left to right), y in 0..1 (top to bottom).
+pub fn pos(i: usize, n: usize) -> (f32, f32) {
+    let [(_, r1), (t0, t1), (l0, l1)] = segment_bounds(n);
+    let along = |k: usize, len: usize| (k as f32 + 0.5) / len.max(1) as f32;
+    if i < r1 {
+        (ASPECT, 1.0 - along(i, r1))
+    } else if i < t1 {
+        (ASPECT * (1.0 - along(i - t0, t1 - t0)), 0.0)
+    } else {
+        (0.0, along(i.min(l1 - 1) - l0, l1 - l0))
+    }
+}
+
 pub fn led_zone(i: usize, n: usize) -> LedZone {
     let [(r0, r1), (t0, t1), _] = segment_bounds(n);
     if i >= r0 && i < r1 {

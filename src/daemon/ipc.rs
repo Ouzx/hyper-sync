@@ -1,5 +1,4 @@
 use std::io::{BufRead, BufReader, Write};
-use std::io::ErrorKind;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -46,6 +45,10 @@ pub struct Patch {
     pub sensitivity: Option<f32>,
     pub warmth: Option<f32>,
     pub gamma: Option<f32>,
+    pub power: Option<f32>,
+    /// Screen sync smoothing.
+    pub smoothing: Option<f32>,
+    pub audio_smoothing: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,15 +107,11 @@ pub fn run_server(
     }
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind {}", socket_path.display()))?;
-    listener
-        .set_nonblocking(true)
-        .context("ipc nonblocking")?;
     eprintln!("hyper-sync ipc listening on {}", socket_path.display());
 
+    // Blocking accept: requests are answered at once (polling every 50 ms made a held TUI key
+    // queue up faster than it drained). On shutdown the process exits, ending this thread.
     loop {
-        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
-            break;
-        }
         match listener.accept() {
             Ok((stream, _)) => {
                 let config = Arc::clone(&config);
@@ -130,13 +129,9 @@ pub fn run_server(
                     }
                 });
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
-            }
             Err(e) => return Err(e.into()),
         }
     }
-    Ok(())
 }
 
 fn handle_client(
@@ -217,6 +212,9 @@ fn handle_client(
             sensitivity,
             warmth,
             gamma,
+            power,
+            smoothing,
+            audio_smoothing,
         }) => {
             if let Some(c) = &color {
                 let c = c.trim_start_matches('#');
@@ -261,12 +259,23 @@ fn handle_client(
                 if let Some(w) = warmth {
                     cfg.candle.warmth = w.clamp(0.0, 1.0);
                 }
+                if let Some(p) = power {
+                    cfg.effect.power = p.clamp(0.0, 1.0);
+                }
+                if let Some(s) = audio_smoothing {
+                    cfg.audio.smoothing = s.clamp(0.0, 1.0);
+                }
                 #[cfg(feature = "screen")]
-                if let Some(g) = gamma {
-                    cfg.screen.gamma = g.clamp(1.0, 3.0);
+                {
+                    if let Some(g) = gamma {
+                        cfg.screen.gamma = g.clamp(1.0, 3.0);
+                    }
+                    if let Some(s) = smoothing {
+                        cfg.screen.smoothing = s.clamp(0.0, 1.0);
+                    }
                 }
                 #[cfg(not(feature = "screen"))]
-                let _ = gamma;
+                let _ = (gamma, smoothing);
             }
             let new_mode = config.read().unwrap().effect.mode;
             if mode_change && old_mode != new_mode {
@@ -304,9 +313,12 @@ fn synced_status(config: &Arc<RwLock<RuntimeConfig>>, status: &Arc<Mutex<DaemonS
     st.reactivity = cfg.audio.reactivity;
     st.sensitivity = cfg.audio.sensitivity;
     st.warmth = cfg.candle.warmth;
+    st.power = cfg.effect.power;
+    st.audio_smoothing = cfg.audio.smoothing;
     #[cfg(feature = "screen")]
     {
         st.gamma = cfg.screen.gamma;
+        st.screen_smoothing = cfg.screen.smoothing;
     }
     st.clone()
 }
@@ -326,32 +338,9 @@ fn save_and_notify(
     Ok(())
 }
 
-fn parse_mode(s: &str) -> anyhow::Result<crate::config::EffectMode> {
-    use crate::config::EffectMode;
-    Ok(match s {
-        "off" => EffectMode::Off,
-        "solid" => EffectMode::Solid,
-        "candle" => EffectMode::Candle,
-        "chase" => EffectMode::Chase,
-        "wave" => EffectMode::Wave,
-        "scanner" => EffectMode::Scanner,
-        "sparkle" => EffectMode::Sparkle,
-        "pulse" => EffectMode::Pulse,
-        "aurora" => EffectMode::Aurora,
-        "fire" => EffectMode::Fire,
-        "heartbeat" => EffectMode::Heartbeat,
-        "segment" => EffectMode::Segment,
-        "strobe" => EffectMode::Strobe,
-        "wipe" => EffectMode::Wipe,
-        "flow" => EffectMode::Flow,
-        "lava" => EffectMode::Lava,
-        "lightning" => EffectMode::Lightning,
-        "sunrise" => EffectMode::Sunrise,
-        "sound_viz" => EffectMode::SoundViz,
-        "screen" => EffectMode::Screen,
-        "screen_center" => EffectMode::ScreenCenter,
-        other => anyhow::bail!("unknown mode {other}"),
-    })
+fn parse_mode(s: &str) -> anyhow::Result<EffectMode> {
+    // Same names (and aliases for removed effects) as config.toml.
+    serde_json::from_value(serde_json::Value::String(s.into())).with_context(|| format!("unknown mode {s}"))
 }
 
 fn parse_sound_mode(s: &str) -> anyhow::Result<SoundMode> {

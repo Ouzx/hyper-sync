@@ -47,23 +47,30 @@ pub fn ipc_socket_path() -> PathBuf {
 pub enum EffectMode {
     Off,
     Solid,
+    // Removed effects map to their closest survivor so old config.toml files still load.
+    #[serde(alias = "sunrise")]
     Candle,
+    #[serde(alias = "wipe")]
     Chase,
     Wave,
     Rainbow,
     Scanner,
     Sparkle,
+    #[serde(alias = "heartbeat", alias = "strobe")]
     Pulse,
     Aurora,
     Fire,
-    Heartbeat,
     Segment,
-    Strobe,
-    Wipe,
     Flow,
     Lava,
     Lightning,
-    Sunrise,
+    Mood,
+    Swirl,
+    Plasma,
+    Ocean,
+    Juggle,
+    Collision,
+    Clock,
     #[serde(rename = "sound_viz")]
     SoundViz,
     Screen,
@@ -85,14 +92,17 @@ impl EffectMode {
             Self::Pulse => "pulse",
             Self::Aurora => "aurora",
             Self::Fire => "fire",
-            Self::Heartbeat => "heartbeat",
             Self::Segment => "segment",
-            Self::Strobe => "strobe",
-            Self::Wipe => "wipe",
             Self::Flow => "flow",
             Self::Lava => "lava",
             Self::Lightning => "lightning",
-            Self::Sunrise => "sunrise",
+            Self::Mood => "mood",
+            Self::Swirl => "swirl",
+            Self::Plasma => "plasma",
+            Self::Ocean => "ocean",
+            Self::Juggle => "juggle",
+            Self::Collision => "collision",
+            Self::Clock => "clock",
             Self::SoundViz => "sound_viz",
             Self::Screen => "screen",
             Self::ScreenCenter => "screen_center",
@@ -164,6 +174,13 @@ pub struct EffectSection {
     pub fps: u32,
     #[serde(default = "default_speed")]
     pub speed: f32,
+    /// How strongly effects swing (dim, flicker, contrast): 0 = steady, 0.5 = as designed, 1 = double.
+    #[serde(default = "default_power")]
+    pub power: f32,
+}
+
+fn default_power() -> f32 {
+    0.5
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +197,13 @@ pub struct AudioSection {
     pub reactivity: f32,
     #[serde(default = "default_sensitivity")]
     pub sensitivity: f32,
+    /// How slowly the sound reaction falls back: 0 = snappy, 1 = smooth.
+    #[serde(default = "default_audio_smoothing")]
+    pub smoothing: f32,
+}
+
+fn default_audio_smoothing() -> f32 {
+    0.15
 }
 
 fn default_reactivity() -> f32 {
@@ -208,6 +232,9 @@ pub struct ScreenSection {
     /// Screen colors are encoded for monitors; LEDs are linear. 2.2 matches the screen, 1.0 = off.
     #[serde(default = "default_gamma")]
     pub gamma: f32,
+    /// Fade between screen frames: 0 = off (instant), 1 ≈ 0.6 s. Calms flicker, adds lag.
+    #[serde(default)]
+    pub smoothing: f32,
 }
 
 #[cfg(feature = "screen")]
@@ -256,6 +283,7 @@ impl Default for RuntimeConfig {
                 brightness: default_brightness(),
                 fps: default_fps(),
                 speed: default_speed(),
+                power: default_power(),
             },
             solid: SolidSection {
                 color: default_color(),
@@ -267,6 +295,7 @@ impl Default for RuntimeConfig {
                 sound_mode: SoundMode::default(),
                 reactivity: default_reactivity(),
                 sensitivity: default_sensitivity(),
+                smoothing: default_audio_smoothing(),
             },
             #[cfg(feature = "screen")]
             screen: ScreenSection {
@@ -274,6 +303,7 @@ impl Default for RuntimeConfig {
                 layout: default_layout(),
                 forget_portal: false,
                 gamma: default_gamma(),
+                smoothing: 0.0,
             },
         }
     }
@@ -343,34 +373,12 @@ impl RuntimeConfig {
 
     pub fn effect_key(&self) -> String {
         match self.effect.mode {
-            EffectMode::Off => "off".into(),
-            EffectMode::Solid => "solid".into(),
-            EffectMode::Candle => "candle".into(),
-            EffectMode::Chase => "chase".into(),
-            EffectMode::Wave => "wave".into(),
             EffectMode::Rainbow => "solid".into(),
-            EffectMode::Scanner => "scanner".into(),
-            EffectMode::Sparkle => "sparkle".into(),
-            EffectMode::Pulse => "pulse".into(),
-            EffectMode::Aurora => "aurora".into(),
-            EffectMode::Fire => "fire".into(),
-            EffectMode::Heartbeat => "heartbeat".into(),
-            EffectMode::Segment => "segment".into(),
-            EffectMode::Strobe => "strobe".into(),
-            EffectMode::Wipe => "wipe".into(),
-            EffectMode::Flow => "flow".into(),
-            EffectMode::Lava => "lava".into(),
-            EffectMode::Lightning => "lightning".into(),
-            EffectMode::Sunrise => "sunrise".into(),
-            EffectMode::SoundViz => "sound_viz".into(),
             #[cfg(feature = "screen")]
             EffectMode::Screen | EffectMode::ScreenCenter => {
                 format!("screen:{}:{}", self.screen.monitor, self.screen.layout)
             }
-            #[cfg(not(feature = "screen"))]
-            EffectMode::Screen => "screen".into(),
-            #[cfg(not(feature = "screen"))]
-            EffectMode::ScreenCenter => "screen_center".into(),
+            mode => mode.as_str().into(),
         }
     }
 }

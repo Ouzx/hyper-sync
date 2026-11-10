@@ -1,20 +1,33 @@
+//! Animated effects. Speeds are given at speed 1; `c.t` already includes the speed setting (and the
+//! music surge when a sound mode is on). Several effects are our own takes on Hyperion.ng's
+//! defaults (mood blobs, swirl, plasma, sea waves, juggler, collision, light clock).
+
 use std::f32::consts::TAU;
 
 use crate::config::EffectMode;
-use crate::effects::solid::{hsv_to_rgb, is_rainbow_color, resolve_pixel_color};
-use crate::effects::{hash, noise, Ctx};
-use crate::layout::{height, segment_bounds};
+use crate::effects::solid::{hsv_to_rgb, is_rainbow_color, parse_color, resolve_pixel_color, rgb_to_hsv};
+use crate::effects::{hash, noise, swing, Ctx};
+use crate::layout::{height, pos, segment_bounds, ASPECT};
 
 pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
     let (n, t, dt) = (c.n, c.t, c.dt);
     let nf = n as f32;
     let accent = c.cfg.solid.color.as_str();
+    let rainbow = is_rainbow_color(accent);
     let color = |i: usize| resolve_pixel_color(i, n, accent);
+    // Shades around the accent's hue; a rainbow accent drifts through every hue (one cycle / 50 s).
+    let (hue0, sat0) = if rainbow {
+        ((t * 0.02).fract(), 1.0)
+    } else {
+        let (h, s, _) = rgb_to_hsv(parse_color(accent).unwrap_or([255, 51, 0]));
+        (h, s)
+    };
+    let shade = |dh: f32| hsv_to_rgb((hue0 + dh).rem_euclid(1.0), sat0, 1.0);
 
     // Effects with memory update it once per frame, before drawing.
     match mode {
         EffectMode::Sparkle => {
-            for (i, level) in c.mem.iter_mut().enumerate() {
+            for (i, level) in c.mem[..n].iter_mut().enumerate() {
                 *level *= (-dt * 4.0).exp();
                 if hash(i as u32, c.frame) < dt * 0.4 {
                     *level = 1.0;
@@ -22,8 +35,8 @@ pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
             }
         }
         EffectMode::Lightning => {
-            let lit = c.mem.iter().copied().fold(0.0, f32::max) > 0.3;
-            for level in c.mem.iter_mut() {
+            let lit = c.mem[..n].iter().copied().fold(0.0, f32::max) > 0.3;
+            for level in c.mem[..n].iter_mut() {
                 *level *= (-dt * 9.0).exp();
             }
             // Rare strikes, then a burst of re-strikes while the sky is still lit.
@@ -31,9 +44,23 @@ pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
                 let center = hash(1, c.frame) * nf;
                 let half = 3.0 + hash(2, c.frame) * 8.0;
                 let level = 0.6 + 0.4 * hash(3, c.frame);
-                for (i, l) in c.mem.iter_mut().enumerate() {
+                for (i, l) in c.mem[..n].iter_mut().enumerate() {
                     if (i as f32 - center).abs() <= half {
                         *l = l.max(level);
+                    }
+                }
+            }
+        }
+        // Four dots weaving back and forth at different rates, leaving fading trails (RGB memory).
+        EffectMode::Juggle => {
+            let fade = (-dt * 3.0 / (0.2 + c.cfg.effect.power)).exp();
+            c.mem.iter_mut().for_each(|v| *v *= fade);
+            for k in 0..4 {
+                let p = (0.5 + 0.5 * (TAU * t * (0.09 + 0.035 * k as f32) + k as f32 * 1.7).sin()) * (nf - 1.0);
+                let rgb = if rainbow { hsv_to_rgb((k as f32 / 4.0 + t * 0.02).fract(), 1.0, 1.0) } else { shade(k as f32 * 0.07 - 0.1) };
+                for (j, w) in [(p.floor() as usize, 1.0 - p.fract()), (p.floor() as usize + 1, p.fract())] {
+                    for (v, ch) in c.mem[j.min(n - 1) * 3..][..3].iter_mut().zip(rgb) {
+                        *v = v.max(f32::from(ch) / 255.0 * w);
                     }
                 }
             }
@@ -41,79 +68,160 @@ pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
         _ => {}
     }
 
+    let clock = (mode == EffectMode::Clock).then(local_time);
     let mut rgb = Vec::with_capacity(n * 3);
     for i in 0..n {
         let x = i as f32 / nf;
         let px = match mode {
-            // A comet: one lap every 2 s at speed 1, tail fading behind the head.
+            // A comet: one lap every 2 s, tail fading behind the head.
             EffectMode::Chase => {
                 let behind = ((t * 0.5).fract() * nf - i as f32).rem_euclid(nf);
-                scale(color(i), (1.0 - behind / 10.0).max(0.0).powi(2))
+                scale(color(i), swing((1.0 - behind / 10.0).max(0.0).powi(2), c.depth(1.0)))
             }
+            // Two soft waves rolling around the strip; each LED rises and falls every 2 s.
             EffectMode::Wave => {
-                scale(color(i), 0.35 + 0.65 * (0.5 + 0.5 * ((x - t) * TAU).sin()))
+                let w = 0.5 + 0.5 * (TAU * (2.0 * x - t * 0.5)).sin();
+                scale(color(i), swing(w, c.depth(0.65)))
             }
             EffectMode::Scanner => {
                 let phase = (t * 0.5).fract() * 2.0;
                 let u = if phase <= 1.0 { phase } else { 2.0 - phase };
                 let d = (i as f32 - u * (nf - 1.0)).abs();
-                scale(color(i), (1.0 - d / 3.0).max(0.0))
+                scale(color(i), swing((1.0 - d / 3.0).max(0.0), c.depth(1.0)))
             }
-            EffectMode::Sparkle => scale(color(i), c.mem[i] * c.mem[i]),
-            EffectMode::Pulse => scale(color(i), 0.3 + 0.7 * (0.5 - 0.5 * (t * TAU).cos())),
+            EffectMode::Sparkle => scale(color(i), swing(c.mem[i] * c.mem[i], c.depth(1.0))),
+            // Slow breathing, one breath every 3 s; power sets how deep it goes.
+            EffectMode::Pulse => {
+                scale(color(i), swing(0.5 - 0.5 * (TAU * t / 3.0).cos(), c.depth(0.5)))
+            }
+            // Curtains drifting along the strip in two layers (~8 LEDs/s each way) with a fine shimmer.
             EffectMode::Aurora => {
-                let hue = hsv_to_rgb((t * 0.05).fract(), 0.6, 1.0);
-                let base = color(i);
-                let w1 = 0.5 + 0.5 * (x * 3.0 + t * 0.4).sin();
-                let w2 = 0.5 + 0.5 * (x * 5.0 - t * 0.3).sin();
-                let blend = (w1 + w2) * 0.5;
-                let mixed = std::array::from_fn(|k| {
-                    (f32::from(base[k]) * (1.0 - blend) + f32::from(hue[k]) * blend) as u8
-                });
-                scale(mixed, 0.4 + 0.6 * (x * 2.0 + t * 0.2).sin().max(0.0))
+                let a = noise(7, i as f32 / 7.0 - t * 1.2);
+                let b = noise(11, i as f32 / 11.0 + t * 0.7 + 50.0);
+                let glow = (0.6 * a + 0.4 * b).powf(1.5) * 0.85 + 0.15 * noise(i as u32, t * 3.0);
+                let px = if rainbow {
+                    // Green and teal curtains that flare violet at their brightest.
+                    let hue = 0.3 + 0.2 * b + 0.35 * ((a - 0.7).max(0.0) / 0.3);
+                    hsv_to_rgb(hue, 0.85, 1.0)
+                } else {
+                    shade((b - 0.5) * 0.25)
+                };
+                scale(px, swing(glow, c.depth(0.85)))
             }
-            // Flames rise from the bottom of both sides; neighbours share flicker so it moves in tongues.
+            // Red at the bottom, orange toward the top; tongues of flame climb both sides (~9 LEDs/s).
             EffectMode::Fire => {
-                let fl = |j: usize| noise(j as u32, t * 5.0);
-                let flick = 0.5 * fl(i) + 0.25 * (fl(i.wrapping_sub(1)) + fl(i + 1));
-                let heat = (1.0 - 0.8 * height(i, n)) * (0.5 + 0.5 * flick) * 0.9;
-                heat_color(heat)
-            }
-            // Lub-dub: two soft bumps per beat, one beat per second at speed 1.
-            EffectMode::Heartbeat => {
-                let b = t.fract();
-                let bump = |at: f32, w: f32| (-((b - at) / w).powi(2)).exp();
-                scale(color(i), 0.12 + 0.88 * bump(0.08, 0.05) + 0.55 * bump(0.32, 0.06))
+                let h = height(i, n);
+                let [_, (t0, t1), _] = segment_bounds(n);
+                let along = if (t0..t1).contains(&i) { (i - t0) as f32 / 6.0 } else { 0.0 };
+                let side = u32::from(2 * i >= n);
+                let rise = noise(3 + side, h * 4.0 + along - t * 2.2);
+                let lick = 0.65 * rise + 0.35 * noise(i as u32, t * 9.0);
+                let warm = (h * 0.75 + (lick - 0.5) * 0.3).clamp(0.0, 1.0);
+                scale([255, (15.0 + 105.0 * warm) as u8, 0], swing(lick, c.depth(0.6)))
             }
             EffectMode::Segment => {
                 let (start, end) = segment_bounds(n)[(t.floor() as usize) % 3];
-                scale(color(i), if (start..end).contains(&i) { 1.0 } else { 0.0 })
+                scale(color(i), swing(if (start..end).contains(&i) { 1.0 } else { 0.0 }, c.depth(1.0)))
             }
-            EffectMode::Strobe => scale(color(i), if (t * 4.0).fract() < 0.5 { 1.0 } else { 0.0 }),
-            EffectMode::Wipe => {
-                let fill = (t.fract() * nf).ceil() as usize;
-                scale(color(i), if i < fill { 1.0 } else { 0.0 })
-            }
-            // A rainbow drifting around the strip, one lap every 4 s at speed 1.
-            EffectMode::Flow => hsv_to_rgb((x - t * 0.25).rem_euclid(1.0), 1.0, 1.0),
-            // Slow organic blobs of the accent color; rainbow accent drifts through hues.
+            // A rainbow drifting around the strip, one lap every 8 s.
+            EffectMode::Flow => hsv_to_rgb((x - t / 8.0).rem_euclid(1.0), 1.0, 1.0),
+            // Wax blobs rising up both sides (~4–6 LEDs/s) to meet at the top, swelling as they go.
             EffectMode::Lava => {
-                let w = 0.5
-                    + 0.25 * (TAU * (x * 1.5 + t * 0.07)).sin()
-                    + 0.25 * (TAU * (x * 2.5 - t * 0.05) + 1.7).sin();
-                let base = if is_rainbow_color(accent) {
-                    let hue = x * 0.5 + t * 0.02 + 0.1 * (TAU * (x + t * 0.03)).sin();
-                    hsv_to_rgb(hue.rem_euclid(1.0), 1.0, 1.0)
-                } else {
-                    color(i)
-                };
-                scale(base, 0.15 + 0.85 * w * w)
+                let half = (nf - 1.0) / 2.0;
+                let u = (i as f32).min(nf - 1.0 - i as f32) / half;
+                let side = u32::from(i as f32 > half);
+                let heat: f32 = (0..5)
+                    .map(|k| {
+                        let seed = side * 10 + k;
+                        let speed = 0.12 + 0.08 * hash(seed, 1);
+                        let size = 0.06 + 0.05 * (0.5 + 0.5 * (t * 0.8 + k as f32).sin());
+                        let center = (t * speed + hash(seed, 2) * 1.3).rem_euclid(1.3) - 0.15;
+                        (-((u - center) / size).powi(2)).exp()
+                    })
+                    .sum::<f32>()
+                    .min(1.0);
+                let px = if rainbow { hsv_to_rgb((hue0 + u * 0.15).fract(), 1.0, 1.0) } else { shade(0.04 * (heat - 0.5)) };
+                scale(px, swing(heat, c.depth(0.85)))
             }
-            EffectMode::Lightning => scale(color(i), c.mem[i]),
-            // Ten minutes from dark to warm daylight at speed 1; the sides light before the top.
-            EffectMode::Sunrise => {
-                let p = (t / 600.0).min(1.0);
-                sunrise_color((p * 1.6 - height(i, n) * 0.6).clamp(0.0, 1.0))
+            EffectMode::Lightning => scale(color(i), swing(c.mem[i], c.depth(1.0))),
+            // Five color blobs circling the strip (a lap every 8 s), hues ±30° around the accent.
+            EffectMode::Mood => {
+                let b = 0.5 + 0.5 * (TAU * (5.0 * x - t / 8.0)).sin();
+                let morph = 0.5 + 0.5 * (TAU * (2.0 * x + t / 5.0)).sin();
+                scale(shade((b - 0.5) / 6.0), swing(0.6 * b + 0.4 * morph, c.depth(0.75)))
+            }
+            // Three arms rotating around the middle of the screen, one turn every 6 s.
+            EffectMode::Swirl => {
+                let (px, py) = pos(i, n);
+                let angle = (px - ASPECT / 2.0).atan2(0.5 - py);
+                let arm = (0.5 + 0.5 * (3.0 * (angle - TAU * t / 6.0)).cos()).powi(3);
+                if rainbow {
+                    let hue = (angle / TAU - t / 8.0).rem_euclid(1.0);
+                    scale(hsv_to_rgb(hue, 1.0, 1.0), swing(arm, c.depth(0.4)))
+                } else {
+                    scale(color(i), swing(arm, c.depth(0.9)))
+                }
+            }
+            // Overlapping sine fields over the screen, drifting in different directions.
+            EffectMode::Plasma => {
+                let (px, py) = pos(i, n);
+                let r = ((px - ASPECT / 2.0).powi(2) + (py - 0.5).powi(2)).sqrt();
+                let v = ((px * 4.0 + t * 0.9).sin()
+                    + (py * 5.0 - t * 0.7).sin()
+                    + ((px + py) * 3.0 + t * 1.1).sin()
+                    + (r * 7.0 - t * 1.3).sin())
+                    / 4.0;
+                if rainbow {
+                    hsv_to_rgb((0.5 + 0.5 * v + t * 0.03).rem_euclid(1.0), 1.0, 1.0)
+                } else {
+                    scale(shade(v * 0.2), swing(0.5 + 0.5 * v, c.depth(0.8)))
+                }
+            }
+            // Sea waves rolling in from beyond the top-right corner, in ocean blues.
+            EffectMode::Ocean => {
+                let (px, py) = pos(i, n);
+                let d1 = ((px - 1.25 * ASPECT).powi(2) + (py + 0.25).powi(2)).sqrt();
+                let d2 = ((px + 0.3).powi(2) + (py + 0.6).powi(2)).sqrt();
+                let w1 = 0.5 + 0.5 * (TAU * (d1 * 2.5 - t * 0.3)).sin();
+                let w2 = 0.5 + 0.5 * (TAU * (d2 * 1.7 - t * 0.21)).sin();
+                let w = 0.6 * w1 + 0.4 * w2;
+                let deep = [10.0, 0.0, 255.0];
+                let mid = [0.0, 150.0, 255.0];
+                let crest = [0.0, 222.0, 255.0];
+                let px = if w < 0.5 { mix(deep, mid, w * 2.0) } else { mix(mid, crest, w * 2.0 - 1.0) };
+                scale(px, swing(w, c.depth(0.6)))
+            }
+            EffectMode::Juggle => std::array::from_fn(|ch| (c.mem[i * 3 + ch].min(1.0) * 255.0) as u8),
+            // Two comets run in from both ends, meet at the top and burst; every 3 s.
+            EffectMode::Collision => {
+                let p = (t / 3.0).fract();
+                let mid = (nf - 1.0) / 2.0;
+                let fi = i as f32;
+                let (a, b) = (color(i), if rainbow { hsv_to_rgb((hue0 + 0.5).fract(), 1.0, 1.0) } else { shade(0.5) });
+                if p < 0.6 {
+                    let head = p / 0.6 * mid;
+                    let tail = |d: f32| if d >= 0.0 { (1.0 - d / 6.0).max(0.0).powi(2) } else { 0.0 };
+                    let (ga, gb) = (tail(head - fi), tail(fi - (nf - 1.0 - head)));
+                    let px = if ga >= gb { a } else { b };
+                    scale(px, swing(ga.max(gb), c.depth(1.0)))
+                } else {
+                    let e = (p - 0.6) / 0.4;
+                    let d = (fi - mid).abs();
+                    let g = if d <= e * 14.0 { (1.0 - e).powi(2) * (1.0 - 0.5 * d / 14.0) } else { 0.0 };
+                    let white = mix([255.0; 3], a.map(f32::from), e);
+                    scale(white, swing(g, c.depth(1.0)))
+                }
+            }
+            // Hour (blue), minute (green) and second (red) hands; 12 o'clock is the middle of the top.
+            EffectMode::Clock => {
+                let (h, m, s) = clock.unwrap_or_default();
+                let q = (nf - 1.0 - i as f32) / (nf - 1.0); // left end → right end, clockwise
+                let hand = |dial: f32, width: f32| {
+                    let d = ((q - (dial + 0.5) + 0.5).rem_euclid(1.0) - 0.5).abs() * (nf - 1.0);
+                    (1.0 - d / width).max(0.0)
+                };
+                let (hh, mm, ss) = (hand((h % 12.0 + m / 60.0) / 12.0, 2.5), hand((m + s / 60.0) / 60.0, 1.5), hand(s / 60.0, 0.8));
+                [ss, mm, hh].map(|v| (v * 255.0) as u8)
             }
             _ => [0, 0, 0],
         };
@@ -122,29 +230,23 @@ pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
     rgb
 }
 
-fn scale(color: [u8; 3], gain: f32) -> [u8; 3] {
+fn scale<T: Into<f32> + Copy>(color: [T; 3], gain: f32) -> [u8; 3] {
     let g = gain.clamp(0.0, 1.0);
-    color.map(|c| (f32::from(c) * g) as u8)
+    color.map(|c| (c.into() * g).min(255.0) as u8)
 }
 
-/// Black → red → yellow → white as heat goes 0 → 1.
-fn heat_color(heat: f32) -> [u8; 3] {
-    let h = heat.clamp(0.0, 1.0) * 3.0;
-    [h, h - 1.0, h - 2.0].map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+fn mix(a: [f32; 3], b: [f32; 3], f: f32) -> [f32; 3] {
+    std::array::from_fn(|k| a[k] + (b[k] - a[k]) * f.clamp(0.0, 1.0))
 }
 
-fn sunrise_color(p: f32) -> [u8; 3] {
-    const STOPS: [(f32, [f32; 3]); 5] = [
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.25, [90.0, 5.0, 0.0]),
-        (0.5, [255.0, 60.0, 0.0]),
-        (0.75, [255.0, 130.0, 30.0]),
-        (1.0, [255.0, 200.0, 140.0]),
-    ];
-    let k = STOPS.iter().position(|s| s.0 >= p).unwrap_or(STOPS.len() - 1).max(1);
-    let ((p0, a), (p1, b)) = (STOPS[k - 1], STOPS[k]);
-    let f = ((p - p0) / (p1 - p0)).clamp(0.0, 1.0);
-    std::array::from_fn(|j| (a[j] + (b[j] - a[j]) * f) as u8)
+/// Local wall-clock time as (hours, minutes, seconds with fraction).
+fn local_time() -> (f32, f32, f32) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = now.as_secs() as libc::time_t;
+    // SAFETY: localtime_r only writes into the tm we own.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&secs, &mut tm) };
+    (tm.tm_hour as f32, tm.tm_min as f32, tm.tm_sec as f32 + now.subsec_millis() as f32 / 1000.0)
 }
 
 #[cfg(test)]
@@ -152,35 +254,72 @@ mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
 
-    fn frames(mode: EffectMode, count: u32) -> Vec<Vec<u8>> {
-        let cfg = RuntimeConfig::default();
+    const ALL: [EffectMode; 20] = {
+        use EffectMode::*;
+        [Chase, Wave, Scanner, Sparkle, Pulse, Aurora, Fire, Segment, Flow, Lava, Lightning, Mood, Swirl, Plasma, Ocean, Juggle, Collision, Clock, Candle, Solid]
+    };
+
+    /// 20 s of frames at 45 fps with default settings.
+    fn frames(mode: EffectMode, cfg: &RuntimeConfig) -> Vec<Vec<u8>> {
         let audio = crate::audio::AudioSnapshot::new();
-        let mut mem = vec![0.0; 65];
-        (1..=count)
+        let mut mem = vec![0.0; 65 * 3];
+        let dt = 1.0 / 45.0;
+        (1..=900)
             .map(|frame| {
-                let t = frame as f32 * 0.02;
-                render(mode, &mut Ctx { n: 65, t, dt: 0.02, frame, cfg: &cfg, mem: &mut mem, audio: &audio })
+                let t = frame as f32 * dt;
+                let mut c = Ctx { n: 65, t, dt, frame, cfg, mem: &mut mem, audio: &audio };
+                crate::effects::render(mode, &mut c)
             })
             .collect()
     }
 
+    /// How fast LEDs change: per LED and frame the largest change of any channel (so hue shifts
+    /// count, not just brightness), averaged, in full-scale units per second.
+    fn motion(f: &[Vec<u8>]) -> f32 {
+        let step = |a: &[u8], b: &[u8]| -> f32 {
+            a.chunks(3).zip(b.chunks(3)).map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k])).max().unwrap_or(0) as f32 / 255.0).sum()
+        };
+        let total: f32 = f.windows(2).map(|w| step(&w[0], &w[1])).sum();
+        total / 65.0 / (f.len() - 1) as f32 * 45.0
+    }
+
     #[test]
-    fn every_effect_renders_full_frames() {
-        use EffectMode::*;
-        for mode in [Chase, Wave, Scanner, Sparkle, Pulse, Aurora, Fire, Heartbeat, Segment, Strobe, Wipe, Flow, Lava, Lightning, Sunrise] {
-            let out = frames(mode, 3000);
+    fn every_effect_renders_and_moves() {
+        let cfg = RuntimeConfig::default();
+        for mode in ALL {
+            let out = frames(mode, &cfg);
             assert!(out.iter().all(|f| f.len() == 65 * 3), "{mode:?}");
             assert!(out.iter().any(|f| f.iter().any(|&c| c > 0)), "{mode:?} never lights up");
+            let m = motion(&out);
+            let mut warm = cfg.clone();
+            warm.solid.color = "ff3300".into();
+            println!("{:>10}: motion {m:.2}/s rainbow, {:.2}/s ff3300", mode.as_str(), motion(&frames(mode, &warm)));
+            if !matches!(mode, EffectMode::Solid | EffectMode::Clock) {
+                assert!(m > 0.15, "{mode:?} barely moves ({m:.2}/s)");
+            }
         }
     }
 
     #[test]
-    fn fire_burns_the_same_on_both_sides() {
-        let sum = |f: &[u8], r: std::ops::Range<usize>| f[r.start * 3..r.end * 3].iter().map(|&c| c as u32).sum::<u32>();
-        let (right, left) = frames(EffectMode::Fire, 500)
-            .iter()
-            .fold((0, 0), |(r, l), f| (r + sum(f, 0..17), l + sum(f, 48..65)));
-        let ratio = right as f32 / left as f32;
-        assert!((0.9..1.1).contains(&ratio), "right/left = {ratio}");
+    fn power_scales_the_swing() {
+        let mut cfg = RuntimeConfig::default();
+        cfg.effect.power = 0.0;
+        assert!(motion(&frames(EffectMode::Pulse, &cfg)) < 0.01, "power 0 is steady");
+        cfg.effect.power = 0.5;
+        let default = motion(&frames(EffectMode::Pulse, &cfg));
+        cfg.effect.power = 1.0;
+        assert!(motion(&frames(EffectMode::Pulse, &cfg)) > default * 1.8);
+    }
+
+    #[test]
+    fn fire_is_red_at_the_bottom_and_orange_at_the_top() {
+        let cfg = RuntimeConfig::default();
+        let out = frames(EffectMode::Fire, &cfg);
+        let green_share = |leds: &[usize]| {
+            let (g, r) = out.iter().flat_map(|f| leds.iter().map(move |&i| (f[i * 3 + 1] as f32, f[i * 3] as f32))).fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+            g / r
+        };
+        let (bottom, top) = (green_share(&[0, 1, 2, 62, 63, 64]), green_share(&[25, 30, 35, 40]));
+        assert!(bottom < 0.2 && top > 0.3, "bottom {bottom:.2}, top {top:.2}");
     }
 }

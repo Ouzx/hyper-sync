@@ -26,22 +26,25 @@ const MODES: &[(&str, &str)] = &[
     ("screen_center", "Screen Center"),
     ("sound_viz", "Sound Viz"),
     ("solid", "Solid"),
-    ("flow", "Rainbow Flow"),
     ("candle", "Candle"),
     ("fire", "Fire"),
     ("lava", "Lava"),
+    ("mood", "Mood Blobs"),
     ("aurora", "Aurora"),
+    ("ocean", "Ocean"),
     ("pulse", "Pulse"),
-    ("heartbeat", "Heartbeat"),
-    ("sunrise", "Sunrise"),
-    ("chase", "Chase"),
+    ("flow", "Rainbow Flow"),
+    ("swirl", "Swirl"),
+    ("plasma", "Plasma"),
     ("wave", "Wave"),
+    ("chase", "Chase"),
     ("scanner", "Scanner"),
+    ("juggle", "Juggle"),
+    ("collision", "Collision"),
     ("sparkle", "Sparkle"),
     ("lightning", "Lightning"),
     ("segment", "Segment"),
-    ("strobe", "Strobe"),
-    ("wipe", "Wipe"),
+    ("clock", "Clock"),
 ];
 const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
@@ -145,12 +148,11 @@ fn tui_loop(quit: Arc<AtomicBool>) -> anyhow::Result<()> {
         terminal.draw(|f| draw_ui(f, &state))?;
 
         // Sleep until a key arrives or the next poll is due — no busy redraw.
+        // One key per redraw, so a held key shows every step instead of freezing the screen.
         if event::poll(POLL.saturating_sub(last_poll.elapsed()))? {
-            while event::poll(Duration::ZERO)? {
-                if let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
-                    if kind != KeyEventKind::Release && handle_key(&mut state, code, modifiers) {
-                        return Ok(());
-                    }
+            if let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
+                if kind != KeyEventKind::Release && handle_key(&mut state, code, modifiers) {
+                    return Ok(());
                 }
             }
         }
@@ -227,6 +229,18 @@ fn handle_key(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> bo
         KeyCode::Left => cycle_color(state, -1),
         KeyCode::Right => cycle_color(state, 1),
         KeyCode::Char('c' | 'C') => open_color_dial(state),
+        KeyCode::Char('z' | 'Z') | KeyCode::Char('x' | 'X') if uses_power(&st.effect) => {
+            let d = if matches!(code, KeyCode::Char('z' | 'Z')) { -0.05 } else { 0.05 };
+            send(state, Patch { power: Some((st.power + d).clamp(0.0, 1.0)), ..Default::default() });
+        }
+        KeyCode::Char('{') | KeyCode::Char('}') if is_screen_sync(&st.effect) => {
+            let d = if code == KeyCode::Char('{') { -0.05 } else { 0.05 };
+            send(state, Patch { smoothing: Some((st.screen_smoothing + d).clamp(0.0, 1.0)), ..Default::default() });
+        }
+        KeyCode::Char(',') | KeyCode::Char('.') if sound_on(&st) || st.effect == "sound_viz" => {
+            let d = if code == KeyCode::Char(',') { -0.05 } else { 0.05 };
+            send(state, Patch { audio_smoothing: Some((st.audio_smoothing + d).clamp(0.0, 1.0)), ..Default::default() });
+        }
         KeyCode::Char('[') | KeyCode::Char(']') => {
             let dir = if code == KeyCode::Char('[') { -1.0 } else { 1.0 };
             if st.effect == "candle" {
@@ -331,11 +345,15 @@ fn is_screen_sync(mode: &str) -> bool {
 }
 
 fn uses_speed(effect: &str) -> bool {
-    !matches!(effect, "off" | "solid" | "sound_viz") && !is_screen_sync(effect)
+    !matches!(effect, "off" | "solid" | "sound_viz" | "clock") && !is_screen_sync(effect)
+}
+
+fn uses_power(effect: &str) -> bool {
+    uses_speed(effect) && effect != "flow"
 }
 
 fn uses_accent_color(effect: &str) -> bool {
-    !matches!(effect, "off" | "fire" | "flow" | "sunrise") && !is_screen_sync(effect)
+    !matches!(effect, "off" | "fire" | "flow" | "ocean" | "clock") && !is_screen_sync(effect)
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {
@@ -462,7 +480,8 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
 }
 
 /// The strip as it sits on the monitor (17 right / 31 top / 17 left), drawn with half blocks so
-/// each terminal row holds two LEDs. Colors are what the LEDs get, converted for the screen.
+/// each terminal row holds two LEDs, with every 5th LED numbered just inside it. In screen sync the
+/// part of the screen being sampled is shaded with the colour taken from it.
 fn draw_preview(f: &mut Frame, area: Rect, state: &UiState) {
     let st = &state.st;
     let leds: Vec<[u8; 3]> = (0..st.leds.len() / 6)
@@ -470,17 +489,15 @@ fn draw_preview(f: &mut Frame, area: Rect, state: &UiState) {
         .collect();
     let n = if leds.is_empty() { 65 } else { leds.len() };
     let lit = state.connected && st.effect != "off" && leds.len() == n;
+    let rgb = |i: usize| if lit { leds[i] } else { [0, 0, 0] };
     let [(_, r1), (t0, t1), (l0, l1)] = segment_bounds(n);
     let (right, top, left) = (r1, t1 - t0, l1 - l0);
-    let led = |i: usize| -> Color {
-        let [r, g, b] = if lit { leds[i] } else { [0, 0, 0] };
-        if r == 0 && g == 0 && b == 0 {
-            return Color::Rgb(40, 40, 40); // keep the strip's outline visible when dark
-        }
-        // LEDs are linear light; the terminal expects sRGB.
-        let enc = |v: u8| ((f32::from(v) / 255.0).powf(1.0 / 2.2) * 255.0) as u8;
+    // LEDs are linear light; the terminal expects sRGB. `k` dims (for the sampled-area shading).
+    let to_term = |[r, g, b]: [u8; 3], k: f32| {
+        let enc = |v: u8| ((f32::from(v) / 255.0).powf(1.0 / 2.2) * 255.0 * k) as u8;
         Color::Rgb(enc(r), enc(g), enc(b))
     };
+    let led = |i: usize| if rgb(i) == [0, 0, 0] { Color::Rgb(40, 40, 40) } else { to_term(rgb(i), 1.0) };
     // Pixel grid: row 0 is the top run (right to left), rows 1.. are the sides (top to bottom).
     let pixel = |c: usize, r: usize| -> Option<Color> {
         if r == 0 {
@@ -496,50 +513,103 @@ fn draw_preview(f: &mut Frame, area: Rect, state: &UiState) {
     let cw = (area.width as usize / (top + 2)).clamp(1, 3);
     let width = ((top + 2) * cw) as u16;
     let x0 = area.x + area.width.saturating_sub(width) / 2;
-    let rows = (right.max(left) + 2) / 2;
-    for y in 0..rows.min(area.height as usize) {
+    let rows = ((right.max(left) + 2) / 2).min(area.height as usize);
+    let cell = |c: usize, y: usize, cols: usize| Rect { x: x0 + (c * cw) as u16, y: area.y + y as u16, width: (cols * cw) as u16, height: 1 };
+    for y in 0..rows {
         let spans: Vec<Span> = (0..top + 2)
             .map(|c| {
-                let cell = |s: &'static str, st: Style| Span::styled(s.repeat(cw), st);
+                let fill = |s: &'static str, st: Style| Span::styled(s.repeat(cw), st);
                 match (pixel(c, 2 * y), pixel(c, 2 * y + 1)) {
-                    (Some(a), Some(b)) => cell("▀", Style::new().fg(a).bg(b)),
-                    (Some(a), None) => cell("▀", Style::new().fg(a)),
-                    (None, Some(b)) => cell("▄", Style::new().fg(b)),
-                    (None, None) => cell(" ", Style::new()),
+                    (Some(a), Some(b)) => fill("▀", Style::new().fg(a).bg(b)),
+                    (Some(a), None) => fill("▀", Style::new().fg(a)),
+                    (None, Some(b)) => fill("▄", Style::new().fg(b)),
+                    (None, None) => fill(" ", Style::new()),
                 }
             })
             .collect();
-        f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: x0, y: area.y + y as u16, width, height: 1 });
+        f.render_widget(Paragraph::new(Line::from(spans)), cell(0, y, top + 2));
     }
 
-    // Status inside the monitor outline.
-    let inner = Rect {
-        x: x0 + cw as u16 + 1,
-        y: area.y + 2,
-        width: (top * cw) as u16 - 2,
-        height: (rows as u16).saturating_sub(3),
-    };
-    let label = mode_index(&st.effect).map_or(st.effect.as_str(), |i| MODES[i].1);
-    let mut lines = vec![Line::from(Span::styled(label.to_uppercase(), Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)))];
-    if !state.connected {
-        lines.push(Line::styled("daemon not responding — retrying", Style::new().fg(Color::Red)));
-    } else {
-        lines.push(Line::from(vec![
-            Span::raw(format!("{:.0}/{} fps · ", st.actual_fps, st.fps)),
-            if st.serial_ok {
-                Span::styled("strip connected", Style::new().fg(Color::Green))
-            } else {
-                Span::styled("strip disconnected", Style::new().fg(Color::Red))
-            },
-        ]));
-        if is_screen_sync(&st.effect) && st.width > 0 {
-            lines.push(Line::styled(format!("capturing {}×{}", st.width, st.height), DIM));
+    // Edge sync: the band just inside the strip stands for the screen edge each LED samples.
+    let edges = lit && st.effect == "screen";
+    let band = |i: usize| -> Style {
+        if !edges {
+            return DIM;
         }
-        if let Some(err) = &st.last_error {
-            lines.push(Line::styled(err.clone(), Style::new().fg(Color::Red)));
+        let [r, g, b] = rgb(i);
+        let bright = 0.3 * f32::from(r) + 0.6 * f32::from(g) + 0.1 * f32::from(b) > 110.0;
+        Style::new().bg(to_term(rgb(i), 0.55)).fg(if bright { Color::Black } else { Color::White })
+    };
+    // (column, line) of the band cell next to LED `i`; None on the corner line.
+    let band_cell = |i: usize| -> Option<(usize, usize)> {
+        let (c, r) = if i < r1 {
+            (top, r1 - i)
+        } else if i < t1 {
+            return Some((t1 - i, 1));
+        } else {
+            (1, i - l0 + 1)
+        };
+        (r >= 2).then_some((c, r / 2))
+    };
+    if edges {
+        for i in 0..n {
+            if let Some((c, y)) = band_cell(i).filter(|&(_, y)| y < rows) {
+                f.render_widget(Paragraph::new(" ".repeat(cw)).style(band(i)), cell(c, y, 1));
+            }
         }
     }
-    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
+    for i in (0..n).step_by(5).chain([n - 1]) {
+        if let Some((c, y)) = band_cell(i).filter(|&(_, y)| y < rows) {
+            f.render_widget(Paragraph::new(i.to_string()).style(band(i)), Rect { width: 2, ..cell(c, y, 1) });
+        }
+    }
+
+    // Status inside the monitor outline; center sync shows the box it averages.
+    let text = |f: &mut Frame, y: usize, line: Line<'static>| {
+        if y + 1 < rows {
+            f.render_widget(Paragraph::new(line).alignment(Alignment::Center), cell(2, y, top - 2));
+        }
+    };
+    let label = mode_index(&st.effect).map_or(st.effect.as_str(), |i| MODES[i].1);
+    text(f, 2, Line::styled(label.to_uppercase(), Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+    if !state.connected {
+        text(f, 3, Line::styled("daemon not responding — retrying", Style::new().fg(Color::Red)));
+        return;
+    }
+    text(f, 3, Line::from(vec![
+        Span::raw(format!("{:.0}/{} fps · ", st.actual_fps, st.fps)),
+        if st.serial_ok {
+            Span::styled("strip connected", Style::new().fg(Color::Green))
+        } else {
+            Span::styled("strip disconnected", Style::new().fg(Color::Red))
+        },
+    ]));
+    let mut info_line = 4;
+    if st.effect == "screen_center" && rows >= 9 {
+        let margin = (top as f32 * 0.275).round() as usize;
+        let shade = if lit { to_term(rgb(0), 0.6) } else { Color::Rgb(40, 40, 40) };
+        for y in 4..=6 {
+            let caption = if y == 5 { "sampled area" } else { "" };
+            f.render_widget(
+                Paragraph::new(caption).alignment(Alignment::Center).style(Style::new().bg(shade).fg(Color::White)),
+                cell(1 + margin, y, top - 2 * margin),
+            );
+        }
+        info_line = 7;
+    }
+    if is_screen_sync(&st.effect) && st.width > 0 {
+        let what = if st.effect == "screen" {
+            let band = ((st.width.min(st.height) as f32) * 0.03).clamp(16.0, 96.0);
+            format!("{band:.0} px band along each edge")
+        } else {
+            "middle 45% of the screen".into()
+        };
+        text(f, info_line, Line::styled(format!("capturing {}×{} · {what}", st.width, st.height), DIM));
+        info_line += 1;
+    }
+    if let Some(err) = &st.last_error {
+        text(f, info_line, Line::styled(err.clone(), Style::new().fg(Color::Red)));
+    }
 }
 
 fn bar(ratio: f32, width: usize, color: Color, enabled: bool) -> Span<'static> {
@@ -551,7 +621,7 @@ fn bar(ratio: f32, width: usize, color: Color, enabled: bool) -> Span<'static> {
 /// One control row: label, value spans, key hint.
 fn row(label: &str, mut value: Vec<Span<'static>>, keys: &str, enabled: bool) -> Line<'static> {
     let label_style = if enabled { Style::new() } else { DIM };
-    let mut spans = vec![Span::styled(format!("{label:<12}"), label_style)];
+    let mut spans = vec![Span::styled(format!("{label:<14}"), label_style)];
     spans.append(&mut value);
     spans.push(Span::styled(format!(" {keys}"), DIM));
     Line::from(spans)
@@ -559,13 +629,32 @@ fn row(label: &str, mut value: Vec<Span<'static>>, keys: &str, enabled: bool) ->
 
 fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
     let st = &state.st;
-    // Bars take whatever the panel has left after label, value and key hint.
-    let bw = (area.width as usize).saturating_sub(2 + 12 + 6 + 5).clamp(8, 40);
     let on = state.connected;
-    let sound = sound_on(st);
-    let speed = uses_speed(&st.effect);
-    let accent = uses_accent_color(&st.effect);
-    let val = |s: String, enabled: bool| Span::styled(format!(" {s:>5}"), if enabled { Style::new() } else { DIM });
+    // Bars take whatever the panel has left after label, value and key hint.
+    let bw = (area.width as usize).saturating_sub(2 + 14 + 6 + 5).clamp(8, 40);
+    let screen = is_screen_sync(&st.effect) && on;
+    let speed = uses_speed(&st.effect) && on;
+    let power = uses_power(&st.effect) && on;
+    let accent = uses_accent_color(&st.effect) && on;
+    let sound = sound_on(st) && on;
+    let audio = (sound || st.effect == "sound_viz") && on;
+    let slider = |label: &str, ratio: f32, color: Color, value: String, keys: &str, enabled: bool| {
+        let value = Span::styled(format!(" {value:>5}"), if enabled { Style::new() } else { DIM });
+        row(label, vec![bar(ratio, bw, color, enabled), value], keys, enabled)
+    };
+    let pct = |v: f32| format!("{:.0}%", v * 100.0);
+    let picker = |items: &[String], selected: &str, color: Color| -> Vec<Span<'static>> {
+        items
+            .iter()
+            .map(|it| {
+                if it == selected {
+                    Span::styled(format!("[{it}]"), Style::new().fg(color).add_modifier(Modifier::BOLD))
+                } else {
+                    Span::raw(format!(" {it} "))
+                }
+            })
+            .collect()
+    };
 
     // Color presets as swatches; the selected one is a diamond. Rainbow cycles its hue.
     let mut swatches: Vec<Span> = (0..COLOR_SLOT_COUNT)
@@ -578,47 +667,31 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
                 parse_color(hex).unwrap_or([128, 128, 128])
             };
             let glyph = if i == state.color_idx { "◆ " } else { "■ " };
-            Span::styled(glyph, if accent && on { Style::new().fg(Color::Rgb(rgb[0], rgb[1], rgb[2])) } else { DIM })
+            Span::styled(glyph, if accent { Style::new().fg(Color::Rgb(rgb[0], rgb[1], rgb[2])) } else { DIM })
         })
         .collect();
-    swatches.push(Span::styled(
-        if is_rainbow_color(&st.color) { "rainbow".to_string() } else { st.color.clone() },
-        if accent { Style::new() } else { DIM },
-    ));
-
-    let fps_spans: Vec<Span> = FPS_PRESETS
-        .iter()
-        .map(|&p| {
-            if p == st.fps {
-                Span::styled(format!("[{p}]"), Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            } else {
-                Span::raw(format!(" {p} "))
-            }
-        })
-        .collect();
+    // The hex only when the row has room for it (not at 80 columns).
+    if area.width as usize >= 2 + 14 + 2 * COLOR_SLOT_COUNT + 8 + 5 {
+        swatches.push(Span::styled(
+            if is_rainbow_color(&st.color) { "rainbow".to_string() } else { st.color.clone() },
+            if accent { Style::new() } else { DIM },
+        ));
+    }
 
     let tune = if st.effect == "candle" {
-        row("warmth", vec![bar(st.warmth, bw, Color::LightRed, on), val(format!("{:.0}%", st.warmth * 100.0), on)], "[/]", on)
+        slider("warmth", st.warmth, Color::LightRed, pct(st.warmth), "[ ]", on)
     } else if is_screen_sync(&st.effect) {
-        row("gamma", vec![bar((st.gamma - 1.0) / 2.0, bw, Color::LightBlue, on), val(format!("{:.1}", st.gamma), on)], "[/]", on)
+        slider("gamma", (st.gamma - 1.0) / 2.0, Color::LightBlue, format!("{:.1}", st.gamma), "[ ]", on)
     } else {
-        row("tune", vec![Span::styled("not used by this effect", DIM)], "", false)
+        row("warmth", vec![Span::styled("candle (gamma: screen)", DIM)], "", false)
     };
-
-    let sound_spans: Vec<Span> = SOUND_MODES
-        .iter()
-        .map(|&m| {
-            if m == st.sound_mode {
-                Span::styled(format!("[{m}]"), Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD))
-            } else {
-                Span::raw(format!(" {m} "))
-            }
-        })
-        .collect();
+    let screen_tau = 0.6 * st.screen_smoothing.powi(2) * 1000.0;
+    let fps: Vec<String> = FPS_PRESETS.iter().map(u32::to_string).collect();
+    let sound_modes: Vec<String> = SOUND_MODES.iter().map(|m| m.to_string()).collect();
 
     // A tiny spectrum while audio is running (sound modes or Sound Viz).
     const TICKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-    let audio = if st.spectrum.is_empty() {
+    let spectrum = if st.spectrum.is_empty() {
         row("audio", vec![Span::styled("off", DIM)], "", false)
     } else {
         let mut spans: Vec<Span> = st
@@ -626,21 +699,23 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
             .iter()
             .map(|&v| Span::styled(TICKS[((v.clamp(0.0, 1.0) * 7.0).round()) as usize], Style::new().fg(Color::Magenta)))
             .collect();
-        spans.push(val(format!("{:.0}%", st.audio_level * 100.0), true));
+        spans.push(Span::raw(format!("  {:.0}%", st.audio_level * 100.0)));
         row("audio", spans, "", true)
     };
 
     let lines = vec![
-        row("brightness", vec![bar(st.brightness, bw, Color::Cyan, on), val(format!("{:.0}%", st.brightness * 100.0), on)], "w/s", on),
-        row("speed", vec![bar((st.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN), bw, Color::Yellow, speed && on), val(format!("{:.1}×", st.speed), speed && on)], "a/d", speed && on),
-        row("fps", fps_spans, "-/=", on),
-        row("color", swatches, "←→ c", accent && on),
+        slider("brightness", st.brightness, Color::Cyan, pct(st.brightness), "w/s", on),
+        slider("speed", (st.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN), Color::Yellow, format!("{:.1}×", st.speed), "a/d", speed),
+        slider("power", st.power, Color::LightRed, pct(st.power), "z/x", power),
+        row("fps", picker(&fps, &st.fps.to_string(), Color::Cyan), "-/=", on),
+        row("color", swatches, "←→ c", accent),
         tune,
-        Line::raw(""),
-        row("sound", sound_spans, "Tab", on),
-        row("boost", vec![bar(st.reactivity, bw, Color::Green, sound && on), val(format!("{:.0}%", st.reactivity * 100.0), sound && on)], "j/k", sound && on),
-        row("sensitivity", vec![bar(st.sensitivity, bw, Color::LightBlue, sound && on), val(format!("{:.0}%", st.sensitivity * 100.0), sound && on)], "h/l", sound && on),
-        audio,
+        slider("screen smooth", st.screen_smoothing, Color::LightBlue, if screen_tau < 1.0 { "off".into() } else { format!("{screen_tau:.0}ms") }, "{ }", screen),
+        row("sound", picker(&sound_modes, &st.sound_mode, Color::Magenta), "Tab", on),
+        slider("reaction", st.reactivity, Color::Green, pct(st.reactivity), "j/k", sound),
+        slider("sensitivity", st.sensitivity, Color::LightBlue, pct(st.sensitivity), "h/l", sound),
+        slider("sound smooth", st.audio_smoothing, Color::Magenta, format!("{:.0}ms", 50.0 + 550.0 * st.audio_smoothing), ", .", audio),
+        spectrum,
     ];
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" controls ")), area);
 }
@@ -698,21 +773,23 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 fn draw_help(f: &mut Frame) {
     const KEYS: &[(&str, &str)] = &[
         ("↑/↓, Enter", "browse; starts when you pause (Enter: now)"),
-        ("1–21", "jump to an effect by number"),
+        ("1–24", "jump to an effect by number"),
         ("w/s", "brightness"),
         ("a/d", "speed (animated effects)"),
+        ("z/x", "power: how strongly effects dim, flicker, contrast"),
         ("- / =", "frame rate"),
-        ("←/→", "color preset"),
-        ("c", "custom color dial"),
+        ("←/→, c", "color preset · custom color dial"),
         ("[ / ]", "candle warmth · screen gamma"),
+        ("{ / }", "screen smoothing (calmer, but lags)"),
         ("Tab", "sound mode: off · level · balance"),
-        ("j/k", "audio boost"),
-        ("h/l", "audio sensitivity"),
+        ("j/k", "sound reaction: dims on quiet, lifts on beats"),
+        ("h/l", "sound sensitivity"),
+        (", / .", "sound smoothing: how slowly it falls back"),
         ("R", "pick another screen to capture"),
         ("Ctrl+R", "restart the current effect"),
         ("q, Esc", "quit (the daemon keeps running)"),
     ];
-    let area = centered_rect(70, KEYS.len() as u16 + 2, f.area());
+    let area = centered_rect(90, KEYS.len() as u16 + 2, f.area());
     let lines: Vec<Line> = KEYS
         .iter()
         .map(|(k, what)| Line::from(vec![Span::styled(format!("{k:>11}  "), Style::new().fg(Color::Cyan)), Span::raw(*what)]))
@@ -724,80 +801,41 @@ fn draw_help(f: &mut Frame) {
     );
 }
 
+/// Hue dial: a marker above the full hue bar (it wraps around: left of red is magenta), and the
+/// chosen color shown on its own line below so it can't be mistaken for part of the bar.
 fn draw_color_dial(f: &mut Frame, state: &UiState) {
     let Some(dial) = state.color_dial.as_ref() else {
         return;
     };
     let area = centered_rect(70, 7, f.area());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("custom color")
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = Block::default().borders(Borders::ALL).title(" custom color ").border_style(Style::new().fg(Color::Cyan));
     let inner = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
-
-    let rgb = hsv_to_rgb(dial.hue, 1.0, 1.0);
-    let hex = rgb_to_hex(rgb);
-
-    let swatch = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: 5.min(inner.width),
-        height: 1,
-    };
-    if swatch.width > 0 {
-        f.render_widget(
-            Paragraph::new("     ").style(Style::default().bg(Color::Rgb(rgb[0], rgb[1], rgb[2]))),
-            swatch,
-        );
+    if inner.width < 10 || inner.height < 4 {
+        return;
     }
-
-    let bar_x = inner.x.saturating_add(6);
-    let bar_w = inner.width.saturating_sub(6);
-    if bar_w > 0 {
-        let marker = ((dial.hue * bar_w as f32) as u16).min(bar_w.saturating_sub(1));
-        let mut spans = Vec::with_capacity(bar_w as usize);
-        for i in 0..bar_w {
-            let [r, g, b] = hsv_to_rgb(i as f32 / bar_w as f32, 1.0, 1.0);
-            let ch = if i == marker { "▼" } else { "█" };
-            spans.push(Span::styled(
-                ch,
-                Style::default().fg(Color::Rgb(r, g, b)).add_modifier(
-                    if i == marker {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    },
-                ),
-            ));
-        }
-        f.render_widget(
-            Paragraph::new(Line::from(spans)),
-            Rect {
-                x: bar_x,
-                y: inner.y,
-                width: bar_w,
-                height: 1,
-            },
-        );
-    }
-
-    if inner.height >= 3 {
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::raw(format!("#{hex}  ")),
-                Span::styled(
-                    "←→ hue · Enter set · Esc cancel",
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ])),
-            Rect {
-                x: inner.x,
-                y: inner.y + 2,
-                width: inner.width,
-                height: 1,
-            },
-        );
+    let line = |y: u16| Rect { y: inner.y + y, height: 1, ..inner };
+    let w = inner.width;
+    let marker = ((dial.hue * w as f32) as u16).min(w - 1);
+    f.render_widget(Paragraph::new(format!("{}▼", " ".repeat(marker as usize))).style(Style::new().add_modifier(Modifier::BOLD)), line(0));
+    let bar: Vec<Span> = (0..w)
+        .map(|i| {
+            let [r, g, b] = hsv_to_rgb(i as f32 / w as f32, 1.0, 1.0);
+            Span::styled("█", Style::new().fg(Color::Rgb(r, g, b)))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(Line::from(bar)), line(1));
+    let [r, g, b] = hsv_to_rgb(dial.hue, 1.0, 1.0);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("selected "),
+            Span::styled("      ", Style::new().bg(Color::Rgb(r, g, b))),
+            Span::raw(format!(" #{}", rgb_to_hex([r, g, b]))),
+        ])),
+        line(3),
+    );
+    if inner.height >= 5 {
+        f.render_widget(Paragraph::new(Span::styled("←→ hue (wraps around) · Enter keep · Esc cancel", DIM)), line(4));
     }
 }

@@ -32,6 +32,12 @@ pub struct DaemonStatus {
     pub warmth: f32,
     #[serde(default)]
     pub gamma: f32,
+    #[serde(default)]
+    pub power: f32,
+    #[serde(default)]
+    pub screen_smoothing: f32,
+    #[serde(default)]
+    pub audio_smoothing: f32,
     /// What the LEDs show right now: hex RGB, one triple per LED.
     #[serde(default)]
     pub leds: String,
@@ -105,6 +111,12 @@ impl DaemonStatus {
             gamma: cfg.screen.gamma,
             #[cfg(not(feature = "screen"))]
             gamma: 1.0,
+            power: cfg.effect.power,
+            #[cfg(feature = "screen")]
+            screen_smoothing: cfg.screen.smoothing,
+            #[cfg(not(feature = "screen"))]
+            screen_smoothing: 0.0,
+            audio_smoothing: cfg.audio.smoothing,
             leds: String::new(),
             spectrum: Vec::new(),
         }

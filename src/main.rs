@@ -150,6 +150,15 @@ enum CtlAction {
         /// Screen sync gamma, 1.0 (off) to 3.0
         #[arg(long)]
         gamma: Option<f32>,
+        /// Effect strength: 0 = steady, 0.5 = as designed, 1 = strongest
+        #[arg(long)]
+        power: Option<f32>,
+        /// Screen sync smoothing, 0 (off) to 1 (~0.6 s fade)
+        #[arg(long)]
+        smoothing: Option<f32>,
+        /// Sound reaction smoothing, 0 (snappy) to 1 (smooth)
+        #[arg(long)]
+        audio_smoothing: Option<f32>,
     },
 }
 
@@ -347,6 +356,9 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
             speed,
             warmth,
             gamma,
+            power,
+            smoothing,
+            audio_smoothing,
         } => {
             ipc_request(&IpcRequest::Patch(Patch {
                 mode,
@@ -356,6 +368,9 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
                 speed,
                 warmth,
                 gamma,
+                power,
+                smoothing,
+                audio_smoothing,
                 ..Default::default()
             }))?;
             Ok(())

@@ -350,6 +350,8 @@ struct CtrlFrameState {
     width: Arc<AtomicU32>,
     height: Arc<AtomicU32>,
     last_frame: std::cell::RefCell<Instant>,
+    /// Smoothed LED colors carried between frames (screen smoothing).
+    smooth: std::cell::RefCell<Vec<f32>>,
     got_frame: std::cell::RefCell<bool>,
     fps_meter: std::cell::RefCell<FpsMeter>,
     status: Arc<Mutex<DaemonStatus>>,
@@ -477,6 +479,7 @@ fn run_capture(
         width: width.clone(),
         height: height.clone(),
         last_frame: std::cell::RefCell::new(Instant::now() - min_interval),
+        smooth: std::cell::RefCell::new(Vec::new()),
         got_frame: std::cell::RefCell::new(false),
         fps_meter: std::cell::RefCell::new(FpsMeter::new()),
         status: Arc::clone(&status),
@@ -582,6 +585,20 @@ fn run_capture(
                     }
                     _ => sample::sample_edges(datas, format, width, height, &state.zones),
                 };
+                // Smoothing: ease toward the new colors with a time constant of 0.6 s × smoothing².
+                let tau = 0.6 * cfg.screen.smoothing.clamp(0.0, 1.0).powi(2);
+                let mut prev = state.smooth.borrow_mut();
+                if tau > 0.001 && prev.len() == rgb.len() {
+                    let dt = now.duration_since(*state.last_frame.borrow()).as_secs_f32().min(0.5);
+                    let a = 1.0 - (-dt / tau).exp();
+                    for (p, c) in prev.iter_mut().zip(rgb.iter_mut()) {
+                        *p += (f32::from(*c) - *p) * a;
+                        *c = p.round() as u8;
+                    }
+                } else {
+                    *prev = rgb.iter().map(|&c| f32::from(c)).collect();
+                }
+                drop(prev);
                 finish(&mut rgb, &cfg, cfg.screen.gamma, #[cfg(feature = "audio")] &state.audio);
                 let leds = cfg.device.leds;
                 drop(cfg);

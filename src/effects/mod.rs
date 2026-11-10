@@ -26,7 +26,7 @@ pub struct Ctx<'a> {
     pub dt: f32,
     pub frame: u32,
     pub cfg: &'a RuntimeConfig,
-    /// Per-LED memory kept between frames (flicker, spark levels); zeroed when the effect starts.
+    /// Per-LED memory kept between frames, 3 floats per LED; zeroed when the effect starts.
     pub mem: &'a mut [f32],
     #[cfg(feature = "audio")]
     pub audio: &'a AudioSnapshot,
@@ -42,7 +42,7 @@ pub fn run(
     #[cfg(feature = "audio")] audio: Arc<AudioSnapshot>,
 ) -> anyhow::Result<()> {
     let n = usize::from(config.read().unwrap().device.leds);
-    let mut mem = vec![0.0f32; n];
+    let mut mem = vec![0.0f32; n * 3];
     let mut fps_meter = FpsMeter::new();
     let (mut t, mut frame) = (0.0f32, 0u32);
     let mut last = Instant::now();
@@ -54,7 +54,16 @@ pub fn run(
             break;
         }
         let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f32() * cfg.effect.speed.max(0.1);
+        // With a sound mode on, music drives the clock: animations surge on beats.
+        #[cfg(feature = "audio")]
+        let surge = if cfg.audio.sound_mode == crate::config::SoundMode::Off {
+            1.0
+        } else {
+            1.0 + 2.0 * cfg.audio.reactivity * audio.bass_level()
+        };
+        #[cfg(not(feature = "audio"))]
+        let surge = 1.0;
+        let dt = now.duration_since(last).as_secs_f32() * cfg.effect.speed.max(0.1) * surge;
         last = now;
         t += dt;
         frame = frame.wrapping_add(1);
@@ -166,6 +175,19 @@ pub fn to_hex(rgb: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+impl Ctx<'_> {
+    /// How far an effect may swing from steady full color: `design` at the default power (0.5),
+    /// nothing at 0, twice as much (max 1) at 1.
+    pub fn depth(&self, design: f32) -> f32 {
+        (design * self.cfg.effect.power.clamp(0.0, 1.0) * 2.0).min(1.0)
+    }
+}
+
+/// Gain for a 0..1 animation `wave` that may dim the light by at most `depth`.
+pub fn swing(wave: f32, depth: f32) -> f32 {
+    1.0 - depth * (1.0 - wave.clamp(0.0, 1.0))
 }
 
 /// Deterministic hash of (a, b) to [0, 1).

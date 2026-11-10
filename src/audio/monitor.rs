@@ -210,7 +210,7 @@ fn run_one_session(
 
     status.lock().unwrap().last_error = None;
 
-    let init = dynamics::from_sensitivity(config.read().unwrap().audio.sensitivity);
+    let init = { let a = &config.read().unwrap().audio; dynamics::from_settings(a.sensitivity, a.smoothing) };
     let mut state = CaptureState {
         level_env: Envelope::new(init.attack_ms, init.release_ms),
         bass_env: Envelope::new(init.attack_ms, init.release_ms),
@@ -251,13 +251,11 @@ fn run_one_session(
                 if usable < FRAME_BYTES {
                     continue;
                 }
-                let sensitivity = config.read().unwrap().audio.sensitivity;
-                process_chunk(
-                    &carry[..usable],
-                    &mut state,
-                    &snapshot,
-                    dynamics::from_sensitivity(sensitivity),
-                );
+                let dyn_cfg = {
+                    let a = &config.read().unwrap().audio;
+                    dynamics::from_settings(a.sensitivity, a.smoothing)
+                };
+                process_chunk(&carry[..usable], &mut state, &snapshot, dyn_cfg);
                 carry.drain(..usable);
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
@@ -385,6 +383,8 @@ fn process_chunk(
         state.last_spectrum = Instant::now();
         let bands = state.analyzer.analyze(&state.history);
         for (i, &b) in bands.iter().enumerate() {
+            // Sound Viz bars fall back as slowly as the smoothing setting says.
+            state.spec_env[i].set_timing(4.0, dyn_cfg.release_ms * 1.5);
             state.spec_env[i].tick(b, spec_dt);
             state.spectrum[i] = state.spec_env[i].value();
         }
