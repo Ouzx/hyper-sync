@@ -4,6 +4,10 @@ Low-latency LED sync for **Skydimo** strips on Linux/Wayland. A single Rust bina
 
 Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, a TUI with a live strip preview, a tray menu, 46 effects (including ports of Hyperion.ng's) and music-reactive lighting. Other LED devices plug in behind one small trait (see [Adding a device](#adding-a-device)).
 
+![The TUI on the monitor while the strip glows on the wall behind it](docs/media/demo.gif)
+
+<sub>Mock-up: the TUI and the LED colors are recorded from hyper-sync itself (`driver = "none"`), then drawn around a monitor by [`scripts/demo/`](scripts/demo). Full quality: [demo.mp4](docs/media/demo.mp4).</sub>
+
 ## Hardware
 
 | Setting | Value |
@@ -66,6 +70,10 @@ One process owns the device. TUI and tray are thin IPC clients; legacy subcomman
 - **`hyper-sync uninstall app|service`** — remove autostart entry or systemd unit
 
 ### Effect modes
+
+![Screen sync and eight effects, each around a monitor](docs/media/effects.png)
+
+<sub>Screen sync is simulated here; the other colors come from the effect engine.</sub>
 
 Our own effects:
 
@@ -162,6 +170,8 @@ Requires `parec` (PipeWire) on `PATH`.
 
 ### TUI
 
+![The TUI: strip preview, controls, stats and the effect list](docs/media/tui.png)
+
 Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running. Fits 80×24; **`?`** lists every key.
 
 **Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, every 5th LED numbered, with the effect, frame rate and connection status inside; in screen sync it shades the part of the screen being sampled) · controls with their keys (left; grouped under light, effect, screen sync and sound when the terminal has 30+ rows) · effects (right): favorites pinned on top, then every effect under its group; `H` marks Hyperion ports. On tall terminals a stats & config panel sits under the controls: frame rate, uptime, an estimate of the LED current (20 mA per channel at full; green under 0.5 A, red from 0.9 A — what a USB 2 / 3 port supplies), strip, screen and config file. Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
@@ -203,7 +213,7 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 - For **screen** mode: `pipewire-devel`, `gcc` (bindgen), portal screencast permission
 - For **audio**: `parec` (PipeWire)
 - For lights-off on lock: `gdbus` (glib2); for "edit settings": `xdg-open` or `$EDITOR`
-- Only to regenerate assets: ImageMagick (icon from `assets/hyper-sync.svg`), ffmpeg (Hyperion GIF frames)
+- Only to regenerate assets: ImageMagick (icon from `assets/hyper-sync.svg`), ffmpeg (Hyperion GIF frames); for the README media also tmux and Python 3 with Pillow (`scripts/demo/`)
 
 ## Build
 
@@ -408,7 +418,7 @@ Limits today: up to 255 LEDs (`leds` is a byte), 55 fps, and the effects draw on
 | + | Daemon, TUI, tray, animated effects, audio overlay | Done |
 | + | Frame pacing, audio spectrum fix, gamma, Hyperion ports, favorites, stats panel, live tray menu, new icon | Done |
 | + | Review: screen-permission and capture-handoff fixes, less CPU and fewer threads, one pinned build, warning-free code | Done |
-| + | Device drivers behind one trait (`skydimo`, `none`) | Done |
+| + | Device drivers behind one trait (`skydimo`, `none`), README demo media | Done |
 
 ## License
 
