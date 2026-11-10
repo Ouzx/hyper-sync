@@ -1,19 +1,32 @@
+# Example ~/.config/hyper-sync/config.toml — the daemon writes one like this on first start.
+# Hand edits apply live; `hyper-sync tui` and the tray change the same file.
+
 [device]
 port = "/dev/ttyUSB0"
 leds = 65
 
 [effect]
-mode = "screen"
-brightness = 0.2
-fps = 30
+mode = "screen"      # any effect id, e.g. candle, lava, mood_blobs, off (see README)
+brightness = 0.15
+fps = 30             # up to ~57 at 115200 baud
 speed = 1.0
+power = 0.5          # how strongly effects dim/flicker/contrast: 0 steady, 0.5 as designed, 1 strongest
 
 [solid]
-color = "ff3300"
+color = "rainbow"    # accent colour: 6 hex digits or "rainbow"
 
 [candle]
-warmth = 0.9
+warmth = 0.9         # 0 = accent colour, 1 = candle amber
+
+[audio]
+sound_mode = "off"   # off | level | balance
+reactivity = 0.3     # how strongly the lights follow the music
+sensitivity = 0.3    # how strongly quiet sounds register
+smoothing = 0.15     # how slowly the reaction falls back (0 = 50 ms, 1 = 600 ms)
 
 [screen]
 monitor = 0
 layout = "layout.toml"
+forget_portal = false
+gamma = 2.2          # LEDs are linear, screens aren't; 1.0 = off
+smoothing = 0.0      # fade between frames: 0 = off, 1 ≈ 0.6 s

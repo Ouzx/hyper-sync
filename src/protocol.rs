@@ -33,6 +33,13 @@ mod tests {
         assert_eq!(frame.len(), 201);
     }
 
+    #[test]
+    fn example_config_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config/runtime.toml");
+        let cfg = crate::config::RuntimeConfig::load(&path).unwrap();
+        assert_eq!((cfg.device.leds, cfg.effect.power, cfg.audio.smoothing), (65, 0.5, 0.15));
+    }
+
     #[cfg(feature = "screen")]
     #[test]
     fn layout_toml_parses() {

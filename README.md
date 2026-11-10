@@ -2,7 +2,7 @@
 
 Low-latency LED sync for **Skydimo** strips on Linux/Wayland. A single Rust binary drives 65 RGB LEDs over USB serial, mirrors screen edges via **xdg-desktop-portal + PipeWire**, and optionally reacts to system audio — no Node/Bun runtime, no multi-platform baggage.
 
-Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, TUI, tray, animated effects, and sound-reactive brightness.
+Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, a TUI with a live strip preview, a tray menu, 46 effects (including ports of Hyperion.ng's) and music-reactive lighting.
 
 ## Hardware
 
@@ -49,7 +49,7 @@ flowchart LR
   IPC --> SUP --> FX --> PROTO --> SER --> USB["/dev/ttyUSB0"]
   SUP --> CAP
   PORTAL --> PW --> SAMP --> CAP --> FX
-  AUD -->|brightness overlay| FX
+  AUD -->|brightness & tempo| FX
 ```
 
 One process owns the serial port. TUI and tray are thin IPC clients; legacy subcommands (`solid`, `screen`, …) patch the running daemon when it is already up.
@@ -58,10 +58,11 @@ One process owns the serial port. TUI and tray are thin IPC clients; legacy subc
 
 ### Daemon & control
 
-- Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`)
-- **Unix socket IPC** — `$XDG_RUNTIME_DIR/hyper-sync.sock`
-- **`hyper-sync ctl`** — status (plain/JSON), stop, restart, quit, reselect screen, patch settings
-- **Serial reconnect** on USB unplug/replug
+- Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`): every setting applies live, also from editors that save by renaming
+- **Unix socket IPC** — `$XDG_RUNTIME_DIR/hyper-sync.sock`, answered at once
+- **`hyper-sync ctl`** — status (plain/JSON), stop, restart, quit, reselect screen, flash, patch settings; invalid values are rejected with a message
+- **Serial reconnect** on USB unplug/replug; a stopped effect is retried every 2 s and `serial_ok` reports a missing strip
+- LEDs go dark while the screen is locked
 - **`hyper-sync install app|service`** — session autostart or systemd user unit
 - **`hyper-sync uninstall app|service`** — remove autostart entry or systemd unit
 
@@ -202,6 +203,8 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 - Skydimo controller on USB serial
 - For **screen** mode: `pipewire-devel`, `gcc` (bindgen), portal screencast permission
 - For **audio**: `parec` (PipeWire)
+- For lights-off on lock: `gdbus` (glib2); for "edit settings": `xdg-open` or `$EDITOR`
+- Only to regenerate assets: ImageMagick (icon from `assets/hyper-sync.svg`), ffmpeg (Hyperion GIF frames)
 
 ## Build
 
@@ -212,7 +215,7 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 Builds with all features (`screen`, `daemon`, `audio`, `tui`, `tray`) and installs to:
 
 - `~/.cargo/bin/hyper-sync` and `~/.local/bin/hyper-sync`
-- Tray icon: `~/.local/share/icons/hyper-sync/hyper-hdr.png`
+- App icon: `~/.local/share/icons/hicolor/{scalable,256x256}/apps/hyper-sync.*` (for the menu and autostart entries; the tray has it built in)
 
 On Fedora, `scripts/build.sh` sets `BINDGEN_EXTRA_CLANG_ARGS` for system headers.
 
@@ -270,9 +273,12 @@ Shared config is created on first start: `~/.config/hyper-sync/config.toml`. Exa
 | Speed | 1.0× |
 | FPS | 30 |
 | Solid color | `rainbow` |
+| Power | 50% |
 | Sound mode | `off` |
-| Audio boost | 30% |
+| Reaction | 30% |
 | Sensitivity | 30% |
+| Sound smoothing | 0.15 (~130 ms) |
+| Screen gamma / smoothing | 2.2 / off |
 
 Existing config files are not overwritten — delete or edit `config.toml` to pick up new defaults.
 
@@ -298,7 +304,7 @@ warmth = 0.9
 
 [screen]
 monitor = 0
-layout = "config/layout.toml"
+layout = "layout.toml"   # in ~/.config/hyper-sync; installed on first start
 gamma = 2.2          # 1.0 = off
 smoothing = 0.0      # 0 = off, 1 ≈ 0.6 s fade
 
@@ -311,7 +317,7 @@ smoothing = 0.15     # how slowly the reaction falls back
 
 ### LED layout
 
-`config/layout.toml` — 65 LEDs, origin **bottom-right**, counter-clockwise:
+`~/.config/hyper-sync/layout.toml` (copied from `config/layout.toml` on first start) — 65 LEDs, origin **bottom-right**, counter-clockwise:
 
 ```
 Index 0–16:   right edge, bottom → top
@@ -347,7 +353,7 @@ hyper-sync off    --port /dev/ttyUSB0 --leds 65
 
 ### Screen capture permission
 
-First run opens the portal picker — allow persistence when prompted. Press **`R`** in the TUI (or tray **Reselect screen capture**) to clear the saved token and open the picker again. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
+First run opens the portal picker — allow persistence when prompted. Press **`R`** in the TUI (or tray **Screen sync → Choose another screen…**) to clear the saved token and open the picker again. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
 
 ## Protocol
 
@@ -366,10 +372,11 @@ Total: **201 bytes** per frame.
 
 | Metric | Target |
 |--------|--------|
-| Update rate | Up to ~57 fps (serial-limited at 115200); the frame loop sleeps only what's left of each interval |
-| Capture + sample | Low CPU; work stays in capture worker thread |
-| Perceived lag | ~20–35 ms (dominated by serial frame time) |
-| Robustness | Survives USB replug, config hot-reload, stream resize |
+| Update rate | The set rate is held up to ~57 fps (serial-limited at 115200): measured 45.0 at 45 and 55.1 at 55, for effects and screen sync. The frame loop sleeps only what's left of each interval. |
+| CPU | Daemon ~2.5% of one core in screen sync; TUI ~0.3% idle |
+| Screen lag | One serial frame (~17 ms) plus up to one frame interval; screen smoothing adds its fade on top |
+| Sound lag | ~30–45 ms from sound to light (estimated from the buffer sizes: ~5 ms PipeWire cycle, fast-attack envelope, frame wait, 17 ms serial) |
+| Robustness | Survives USB replug, PipeWire restarts, config hot-reload, stream resize |
 
 ## Phased delivery (original plan)
 
@@ -381,7 +388,8 @@ Total: **201 bytes** per frame.
 | 3 | Portal + PipeWire screen edge sync, layout remap | Done |
 | 4 | Systemd user service | Done |
 | + | Daemon, TUI, tray, animated effects, audio overlay | Done |
+| + | Frame pacing, audio spectrum fix, gamma, Hyperion ports, favorites, stats panel, live tray menu, new icon | Done |
 
 ## License
 
-MIT
+MIT. The Hyperion.ng effect ports and the frames derived from its GIFs (`assets/hyperion/`) carry Hyperion's MIT notice in `LICENSES/hyperion.ng.txt`.
