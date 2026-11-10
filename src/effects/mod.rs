@@ -150,7 +150,10 @@ fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
         | EffectMode::Snake
         | EffectMode::Sparks
         | EffectMode::Trails
-        | EffectMode::Xmas => hyperion::render(mode, c),
+        | EffectMode::Xmas
+        | EffectMode::HyperionFire
+        | EffectMode::Lights
+        | EffectMode::Matrix => hyperion::render(mode, c),
         _ => animated::render(mode, c),
     }
 }

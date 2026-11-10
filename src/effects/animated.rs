@@ -150,9 +150,9 @@ mod tests {
         use EffectMode::*;
         [Chase, Wave, Scanner, Sparkle, Pulse, Aurora, Fire, Segment, Flow, Lava, Lightning, Candle, Solid]
     };
-    const PORTS: [EffectMode; 22] = {
+    const PORTS: [EffectMode; 25] = {
         use EffectMode::*;
-        [MoodBlobs, Swirl, DoubleSwirl, Plasma, SeaWaves, ColorWaves, Juggler, Collision, LightClock, Traces, Flags, KnightRider, LedTest, LedTestSeq, Police, PoliceSolid, RainbowMood, Random, Snake, Sparks, Trails, Xmas]
+        [MoodBlobs, Swirl, DoubleSwirl, Plasma, SeaWaves, ColorWaves, Juggler, Collision, LightClock, Traces, Flags, KnightRider, LedTest, LedTestSeq, Police, PoliceSolid, RainbowMood, Random, Snake, Sparks, Trails, Xmas, HyperionFire, Lights, Matrix]
     };
 
     /// 20 s of frames at 45 fps with default settings.

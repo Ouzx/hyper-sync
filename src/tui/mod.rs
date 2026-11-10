@@ -37,6 +37,7 @@ const MODES: &[(&str, &str, &str, bool)] = &[
     ("sea_waves", "Sea Waves", "calm", true),
     ("color_waves", "Waves with Color", "calm", true),
     ("plasma", "Plasma", "calm", true),
+    ("hyperion_fire", "Fire Animation", "calm", true),
     ("flow", "Rainbow Flow", "moving", false),
     ("swirl", "Swirl", "moving", true),
     ("double_swirl", "Double Swirl", "moving", true),
@@ -51,11 +52,13 @@ const MODES: &[(&str, &str, &str, bool)] = &[
     ("trails", "Trails", "moving", true),
     ("police", "Police Lights", "moving", true),
     ("police_solid", "Police Solid", "moving", true),
+    ("matrix", "Matrix", "moving", true),
     ("sparkle", "Sparkle", "sparkly", false),
     ("sparks", "Sparks", "sparkly", true),
     ("random", "Random", "sparkly", true),
     ("lightning", "Lightning", "sparkly", false),
     ("xmas", "X-Mas", "sparkly", true),
+    ("lights", "Lights", "sparkly", true),
     ("segment", "Segment", "tools", false),
     ("light_clock", "Light Clock", "tools", true),
     ("flags", "Flags DE/SE", "tools", true),
@@ -547,6 +550,10 @@ fn close_color_dial(state: &mut UiState, commit: bool) {
 // ── drawing ──────────────────────────────────────────────────────────────────
 
 const DIM: Style = Style::new().fg(Color::DarkGray);
+/// Control panel heights (with borders): 12 rows packed, or 17 under group headers.
+const COMPACT_CONTROLS: u16 = 14;
+const SPACED_CONTROLS: u16 = 19;
+const INFO_ROWS: u16 = 7;
 
 fn draw_ui(f: &mut Frame, state: &UiState) {
     let area = f.area();
@@ -567,11 +574,16 @@ fn draw_ui(f: &mut Frame, state: &UiState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(44), Constraint::Length(36)])
         .areas(body);
-    // Tall terminals get stats & config under the controls; otherwise `i` swaps them in.
-    let [controls, info] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(if left.height >= 14 + 7 { [Constraint::Length(14), Constraint::Min(0)] } else { [Constraint::Min(0), Constraint::Length(0)] })
-        .areas(left);
+    // Tall terminals get stats & config under the controls (grouped when there's room for that
+    // too); otherwise `i` swaps them in.
+    let split = if left.height >= SPACED_CONTROLS + INFO_ROWS {
+        [Constraint::Length(SPACED_CONTROLS), Constraint::Min(0)]
+    } else if left.height >= COMPACT_CONTROLS + INFO_ROWS {
+        [Constraint::Length(COMPACT_CONTROLS), Constraint::Min(0)]
+    } else {
+        [Constraint::Min(0), Constraint::Length(0)]
+    };
+    let [controls, info] = Layout::default().direction(Direction::Vertical).constraints(split).areas(left);
 
     if preview_rows > 0 {
         draw_preview(f, preview, state);
@@ -818,20 +830,47 @@ fn draw_controls(f: &mut Frame, area: Rect, state: &UiState) {
         row("audio", spans, "", true)
     };
 
-    let lines = vec![
-        slider("brightness", st.brightness, Color::Cyan, pct(st.brightness), "w/s", on),
-        slider("speed", (st.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN), Color::Yellow, format!("{:.1}×", st.speed), "a/d", speed),
-        slider("power", st.power, Color::LightRed, pct(st.power), "z/x", power),
-        row("fps", picker(&fps, &st.fps.to_string(), Color::Cyan), "-/=", on),
-        row("color", swatches, "←→ c", accent),
-        tune,
-        slider("screen smooth", st.screen_smoothing, Color::LightBlue, if screen_tau < 1.0 { "off".into() } else { format!("{screen_tau:.0}ms") }, "{ }", screen),
-        row("sound", picker(&sound_modes, &st.sound_mode, Color::Magenta), "Tab", on),
-        slider("reaction", st.reactivity, Color::Green, pct(st.reactivity), "j/k", sound),
-        slider("sensitivity", st.sensitivity, Color::LightBlue, pct(st.sensitivity), "h/l", sound),
-        slider("sound smooth", st.audio_smoothing, Color::Magenta, format!("{:.0}ms", 50.0 + 550.0 * st.audio_smoothing), ", .", audio),
-        spectrum,
-    ];
+    let screen_smooth = if screen_tau < 1.0 { "off".into() } else { format!("{screen_tau:.0}ms") };
+    let sound_smooth = format!("{:.0}ms", 50.0 + 550.0 * st.audio_smoothing);
+    let lines = if area.height >= SPACED_CONTROLS {
+        // Room to spare: group the rows under what they act on.
+        let header = |name: &str| Line::styled(format!("─ {name}"), DIM.add_modifier(Modifier::BOLD));
+        let candle = st.effect == "candle" && on;
+        vec![
+            header("light"),
+            slider("brightness", st.brightness, Color::Cyan, pct(st.brightness), "w/s", on),
+            row("fps", picker(&fps, &st.fps.to_string(), Color::Cyan), "-/=", on),
+            header("effect"),
+            slider("speed", (st.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN), Color::Yellow, format!("{:.1}×", st.speed), "a/d", speed),
+            slider("power", st.power, Color::LightRed, pct(st.power), "z/x", power),
+            row("color", swatches, "←→ c", accent),
+            slider("warmth", st.warmth, Color::LightRed, pct(st.warmth), "[ ]", candle),
+            header("screen sync"),
+            slider("gamma", (st.gamma - 1.0) / 2.0, Color::LightBlue, format!("{:.1}", st.gamma), "[ ]", screen),
+            slider("smoothing", st.screen_smoothing, Color::LightBlue, screen_smooth, "{ }", screen),
+            header("sound"),
+            row("mode", picker(&sound_modes, &st.sound_mode, Color::Magenta), "Tab", on),
+            slider("reaction", st.reactivity, Color::Green, pct(st.reactivity), "j/k", sound),
+            slider("sensitivity", st.sensitivity, Color::LightBlue, pct(st.sensitivity), "h/l", sound),
+            slider("smoothing", st.audio_smoothing, Color::Magenta, sound_smooth, ", .", audio),
+            spectrum,
+        ]
+    } else {
+        vec![
+            slider("brightness", st.brightness, Color::Cyan, pct(st.brightness), "w/s", on),
+            slider("speed", (st.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN), Color::Yellow, format!("{:.1}×", st.speed), "a/d", speed),
+            slider("power", st.power, Color::LightRed, pct(st.power), "z/x", power),
+            row("fps", picker(&fps, &st.fps.to_string(), Color::Cyan), "-/=", on),
+            row("color", swatches, "←→ c", accent),
+            tune,
+            slider("screen smooth", st.screen_smoothing, Color::LightBlue, screen_smooth, "{ }", screen),
+            row("sound", picker(&sound_modes, &st.sound_mode, Color::Magenta), "Tab", on),
+            slider("reaction", st.reactivity, Color::Green, pct(st.reactivity), "j/k", sound),
+            slider("sensitivity", st.sensitivity, Color::LightBlue, pct(st.sensitivity), "h/l", sound),
+            slider("sound smooth", st.audio_smoothing, Color::Magenta, sound_smooth, ", .", audio),
+            spectrum,
+        ]
+    };
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" controls ")), area);
 }
 
@@ -972,7 +1011,7 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 fn draw_help(f: &mut Frame) {
     const KEYS: &[(&str, &str)] = &[
         ("↑/↓, Enter", "browse; starts when you pause (Enter: now)"),
-        ("1–39", "jump to an effect by number"),
+        ("1–42", "jump to an effect by number"),
         ("f", "favorite: start it and pin it to the top (again: unpin)"),
         ("w/s", "brightness"),
         ("a/d", "speed (animated effects)"),

@@ -112,9 +112,10 @@ Ports of [Hyperion.ng](https://github.com/hyperion-project/hyperion.ng)'s bundle
 | `xmas` | X-Mas |
 | `light_clock` | Light clock: hour, minute and second as wedges fading out behind each hand |
 | `flags` | Flags Germany/Sweden |
+| `hyperion_fire` / `lights` / `matrix` | Fire / Lights / Matrix: Hyperion's GIF animations played at 25 / 25 / 30 fps. The frames are stored shrunk to 32×18 (`assets/hyperion/*.rgb`, ~210 KB), since the LEDs only ever see each frame's edge zones |
 | `led_test` / `led_test_seq` | Led Test / Led Test - Sequence (pair with the LED numbers in the TUI) |
 
-Not ported: **Pac-Man** (a trademarked game character), **Strobe red/white** (strobes were removed on request), **System Shutdown** (a one-off alarm that can halt the machine), **Cinema brighten/dim lights** (one-off fades), **Notify blue** (`ctl flash 0000ff` does this), **Breath** (≈ `pulse`), **Candle** (ours is one shared flame; Hyperion's flickers every LED on its own, which reads as a flat glow from a distance), **Warm/Cold mood blobs** (base hue wandering in a range; use a red or blue accent), and **Fire / Lights / Matrix**, which play GIF animations that would have to be bundled.
+Not ported: **Pac-Man** (a trademarked game character), **Strobe red/white** (strobes were removed on request), **System Shutdown** (a one-off alarm that can halt the machine), **Cinema brighten/dim lights** (one-off fades), **Notify blue** (`ctl flash 0000ff` does this), **Breath** (≈ `pulse`), **Candle** (ours is one shared flame; Hyperion's flickers every LED on its own, which reads as a flat glow from a distance), **Warm/Cold mood blobs** (base hue wandering in a range; use a red or blue accent). Our own `fire` stays alongside Hyperion's (`hyperion_fire`).
 
 `heartbeat`, `strobe`, `wipe` and `sunrise` were removed, and some effects were renamed (`mood` → `mood_blobs`, `ocean` → `sea_waves`, `juggle` → `juggler`, `clock` → `light_clock`); a config with an old name still loads.
 
@@ -160,12 +161,12 @@ Requires `parec` (PipeWire) on `PATH`.
 
 Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running. Fits 80×24; **`?`** lists every key.
 
-**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, every 5th LED numbered, with the effect, frame rate and connection status inside; in screen sync it shades the part of the screen being sampled) · controls with their keys (left) · effects (right): favorites pinned on top, then every effect under its group; `H` marks Hyperion ports. On tall terminals a stats & config panel sits under the controls: frame rate, uptime, an estimate of the LED current (20 mA per channel at full; green under 0.5 A, red from 0.9 A — what a USB 2 / 3 port supplies), strip, screen and config file. Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
+**Layout:** a live preview of the strip drawn around a monitor outline (what the LEDs show right now, every 5th LED numbered, with the effect, frame rate and connection status inside; in screen sync it shades the part of the screen being sampled) · controls with their keys (left; grouped under light, effect, screen sync and sound when the terminal has 30+ rows) · effects (right): favorites pinned on top, then every effect under its group; `H` marks Hyperion ports. On tall terminals a stats & config panel sits under the controls: frame rate, uptime, an estimate of the LED current (20 mA per channel at full; green under 0.5 A, red from 0.9 A — what a USB 2 / 3 port supplies), strip, screen and config file. Controls an effect doesn't use are dimmed. If the daemon stops answering, the preview says so.
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓`, `Enter` | Browse effects — the one under the cursor starts when you pause; `Enter` starts it now |
-| `1`–`39` | Jump to an effect by number |
+| `1`–`42` | Jump to an effect by number |
 | `f` | Favorite: start the effect and pin it in a section at the top of the list (again: unpin). Saved in `~/.config/hyper-sync/favorites` |
 | `i` | Stats & config panel (always shown under the controls when the terminal has 31+ rows) |
 | `e` | Edit `config.toml` in `$VISUAL`/`$EDITOR` (or the desktop's editor); changes apply live |

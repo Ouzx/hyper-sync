@@ -59,8 +59,37 @@ pub fn render(mode: EffectMode, c: &mut Ctx) -> Vec<u8> {
             let phase = (t / 0.75) as usize % 2;
             per_led(&|i| if (i + phase).is_multiple_of(2) { [255, 255, 255] } else { [255, 0, 0] })
         }
+        // gif.py with fire.gif / lights.gif (25 fps) and matrix.gif (30 fps).
+        EffectMode::HyperionFire => gif(c, FIRE_GIF, 25.0),
+        EffectMode::Lights => gif(c, LIGHTS_GIF, 25.0),
+        EffectMode::Matrix => gif(c, MATRIX_GIF, 30.0),
         _ => vec![0; n * 3],
     }
+}
+
+/// Hyperion's GIF animations, every frame shrunk to 32×18 RGB with area averaging (each cell is the
+/// mean of its patch, much as Hyperion averages an LED's zone). Made with
+/// `ffmpeg -i fire.gif -vf scale=32:18:flags=area -fps_mode passthrough -f rawvideo -pix_fmt rgb24`.
+const GIF_W: usize = 32;
+const GIF_H: usize = 18;
+static FIRE_GIF: &[u8] = include_bytes!("../../assets/hyperion/fire.rgb");
+static LIGHTS_GIF: &[u8] = include_bytes!("../../assets/hyperion/lights.rgb");
+static MATRIX_GIF: &[u8] = include_bytes!("../../assets/hyperion/matrix.rgb");
+
+/// gif.py: plays the frames in a loop at a fixed rate, stretched over the whole screen; each LED
+/// takes the cell at its spot on the edge.
+fn gif(c: &Ctx, frames: &[u8], fps: f32) -> Vec<u8> {
+    let size = GIF_W * GIF_H * 3;
+    let frame = &frames[((c.t * fps) as usize % (frames.len() / size)) * size..][..size];
+    (0..c.n)
+        .flat_map(|i| {
+            let (x, y) = pos(i, c.n);
+            let col = ((x / ASPECT * GIF_W as f32) as usize).min(GIF_W - 1);
+            let row = ((y * GIF_H as f32) as usize).min(GIF_H - 1);
+            let p = (row * GIF_W + col) * 3;
+            [frame[p], frame[p + 1], frame[p + 2]]
+        })
+        .collect()
 }
 
 /// The accent colour, or None for `rainbow`.
@@ -657,6 +686,14 @@ mod tests {
     fn led_test_sequence_lights_leds_in_order() {
         let f = frame_at(EffectMode::LedTestSeq, "rainbow", 2.6); // step 5: LEDs 0..=5 lit
         assert_eq!((led(&f, 0), led(&f, 4), led(&f, 5), led(&f, 6)), ([255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 0, 0]));
+    }
+
+    #[test]
+    fn hyperion_fire_is_brightest_low_on_the_sides() {
+        let f = frame_at(EffectMode::HyperionFire, "rainbow", 0.0);
+        let lum = |i: usize| led(&f, i).iter().map(|&c| u32::from(c)).sum::<u32>();
+        // LED 0 is the bottom of the right side, LED 16 its top corner.
+        assert!(lum(0) > 3 * lum(16), "bottom {} vs top {}", lum(0), lum(16));
     }
 
     #[test]
