@@ -14,3 +14,8 @@ install -Dm755 target/release/hyper-sync "${HOME}/.local/bin/hyper-sync"
 # App icon for the menu / autostart entries (Icon=hyper-sync); the tray has it built in.
 install -Dm644 assets/hyper-sync.svg "${HOME}/.local/share/icons/hicolor/scalable/apps/hyper-sync.svg"
 install -Dm644 assets/hyper-sync.png "${HOME}/.local/share/icons/hicolor/256x256/apps/hyper-sync.png"
+
+# KDE Plasma: the System Tray widget (plasmashell picks up changes to an installed one after a restart).
+if command -v kpackagetool6 >/dev/null; then
+  kpackagetool6 -t Plasma/Applet -u plasmoid >/dev/null 2>&1 || kpackagetool6 -t Plasma/Applet -i plasmoid
+fi

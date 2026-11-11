@@ -17,8 +17,8 @@ use crate::effects::solid::is_rainbow_color;
 use crate::audio::{maybe_modulate, AudioSnapshot};
 
 /// Every effect in display order: (id, label, group, ported from Hyperion.ng). The TUI numbers them
-/// by index (Off is 0); the TUI and the tray menu group them by the third field.
-#[cfg(any(feature = "tui", feature = "tray"))]
+/// by index (Off is 0); the TUI, the tray menu and the Plasma widget group them by the third field.
+#[cfg(feature = "daemon")]
 pub const CATALOG: &[(&str, &str, &str, bool)] = &[
     ("off", "Off", "screen & sound", false),
     ("screen", "Screen Sync", "screen & sound", false),
@@ -67,6 +67,32 @@ pub const CATALOG: &[(&str, &str, &str, bool)] = &[
     ("led_test_seq", "LED Test Sequence", "tools", true),
     ("notify_blue", "Notify Blue", "tools", true),
 ];
+
+// Which controls an effect responds to: the TUI dims the others, the Plasma widget hides them.
+#[cfg(feature = "daemon")]
+pub fn is_screen_sync(mode: &str) -> bool {
+    mode == "screen" || mode == "screen_center"
+}
+
+#[cfg(feature = "daemon")]
+pub fn uses_speed(effect: &str) -> bool {
+    !matches!(effect, "off" | "solid" | "sound_viz" | "light_clock") && !is_screen_sync(effect)
+}
+
+/// Power only shapes our own effects; the Hyperion ports stay as their scripts draw them.
+#[cfg(feature = "daemon")]
+pub fn uses_power(effect: &str) -> bool {
+    matches!(effect, "candle" | "fire" | "lava" | "aurora" | "pulse" | "wave" | "chase" | "scanner" | "sparkle" | "lightning" | "segment")
+}
+
+#[cfg(feature = "daemon")]
+pub fn uses_accent_color(effect: &str) -> bool {
+    matches!(
+        effect,
+        "solid" | "candle" | "lava" | "aurora" | "pulse" | "wave" | "chase" | "scanner" | "sparkle" | "lightning" | "segment" | "sound_viz"
+            | "mood_blobs" | "swirl" | "snake" | "knight_rider" | "sparks" | "trails"
+    )
+}
 
 /// What a renderer gets each frame.
 pub struct Ctx<'a> {

@@ -108,7 +108,7 @@ pub fn run(#[cfg_attr(not(feature = "tray"), allow(unused_variables))] with_tray
     thread::spawn(watch_screen_lock);
 
     #[cfg(feature = "tray")]
-    if with_tray {
+    if with_tray && !crate::tray::plasma_widget_installed() {
         let tray_cfg = Arc::clone(&config);
         thread::spawn(move || {
             if let Err(e) = crate::tray::run(tray_cfg) {

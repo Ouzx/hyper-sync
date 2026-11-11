@@ -146,6 +146,11 @@ enum CtlAction {
     Quit,
     /// Clear saved screen-capture permission (re-prompt next time screen sync starts)
     ReselectScreen,
+    /// List effects as `id<TAB>label<TAB>group<TAB>flags`; flags (comma-separated): favorite,
+    /// hyperion, and the controls it uses: speed, power, color
+    Effects,
+    /// Pin an effect to the TUI's favorites, or unpin it
+    Favorite { id: String },
     /// Blink a color over the current effect, e.g. `ctl flash 00ff00 --count 3`
     Flash {
         color: String,
@@ -179,6 +184,15 @@ enum CtlAction {
         /// Sound reaction smoothing, 0 (snappy) to 1 (smooth)
         #[arg(long)]
         audio_smoothing: Option<f32>,
+        /// React to sound: off, level (whole strip) or balance (left/right channel)
+        #[arg(long)]
+        sound_mode: Option<String>,
+        /// How strongly the lights follow the sound, 0 to 1
+        #[arg(long)]
+        reactivity: Option<f32>,
+        /// How strongly quiet sounds register, 0 to 1
+        #[arg(long)]
+        sensitivity: Option<f32>,
     },
 }
 
@@ -345,6 +359,38 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
             ipc_request(&IpcRequest::Quit)?;
             Ok(())
         }
+        CtlAction::Effects => {
+            let favorites = std::fs::read_to_string(config::favorites_path()).unwrap_or_default();
+            for (id, label, group, hyperion) in effects::CATALOG {
+                let flags = [
+                    ("favorite", favorites.lines().any(|l| l.trim() == *id)),
+                    ("hyperion", *hyperion),
+                    ("speed", effects::uses_speed(id)),
+                    ("power", effects::uses_power(id)),
+                    ("color", effects::uses_accent_color(id)),
+                ];
+                let flags: Vec<&str> = flags.iter().filter(|f| f.1).map(|f| f.0).collect();
+                println!("{id}\t{label}\t{group}\t{}", flags.join(","));
+            }
+            Ok(())
+        }
+        CtlAction::Favorite { id } => {
+            anyhow::ensure!(
+                id != "off" && effects::CATALOG.iter().any(|e| e.0 == id),
+                "no effect {id:?} to pin (Off is always listed; `hyper-sync ctl effects` lists the rest)"
+            );
+            let path = config::favorites_path();
+            let mut favorites: Vec<String> =
+                std::fs::read_to_string(&path).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+            match favorites.iter().position(|f| *f == id) {
+                Some(k) => {
+                    favorites.remove(k);
+                }
+                None => favorites.push(id),
+            }
+            std::fs::write(path, favorites.iter().map(|f| format!("{f}\n")).collect::<String>())?;
+            Ok(())
+        }
         CtlAction::Flash { color, count } => {
             ipc_request(&IpcRequest::Flash { color, count })?;
             Ok(())
@@ -360,6 +406,9 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
             power,
             smoothing,
             audio_smoothing,
+            sound_mode,
+            reactivity,
+            sensitivity,
         } => {
             ipc_request(&IpcRequest::Patch(Patch {
                 mode,
@@ -372,6 +421,9 @@ fn run_ctl(action: CtlAction) -> anyhow::Result<()> {
                 power,
                 smoothing,
                 audio_smoothing,
+                sound_mode,
+                reactivity,
+                sensitivity,
                 ..Default::default()
             }))?;
             Ok(())

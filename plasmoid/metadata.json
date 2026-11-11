@@ -1,0 +1,22 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Oğuzhan Kandakoğlu"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "Live preview and controls for the LED strip",
+        "Icon": "hyper-sync",
+        "Id": "io.github.ouzx.hypersync",
+        "License": "MIT",
+        "EnabledByDefault": true,
+        "Name": "hyper-sync",
+        "Version": "0.1.0",
+        "Website": "https://github.com/Ouzx/hyper-sync"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": "true",
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}

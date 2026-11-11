@@ -2,7 +2,7 @@
 
 Low-latency LED sync for **Skydimo** strips on Linux/Wayland. A single Rust binary drives 65 RGB LEDs over USB serial, mirrors screen edges via **xdg-desktop-portal + PipeWire**, and optionally reacts to system audio — no Node/Bun runtime, no multi-platform baggage.
 
-Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, a TUI with a live strip preview, a tray menu, 46 effects (including ports of Hyperion.ng's) and music-reactive lighting. Other LED devices plug in behind one small trait (see [Adding a device](#adding-a-device)).
+Built in gated phases (solid → candle → screen sync → systemd) and extended with a background daemon, a TUI with a live strip preview, a KDE Plasma widget, a tray menu, 46 effects (including ports of Hyperion.ng's) and music-reactive lighting. Other LED devices plug in behind one small trait (see [Adding a device](#adding-a-device)).
 
 ![The TUI on the monitor while the strip glows on the wall behind it](docs/media/demo.gif)
 
@@ -28,6 +28,7 @@ flowchart LR
   subgraph clients [Clients]
     TUI[TUI]
     TRAY[System tray]
+    WID[Plasma widget]
     CLI[CLI / ctl]
   end
 
@@ -49,13 +50,14 @@ flowchart LR
   TUI --> IPC
   TRAY --> IPC
   CLI --> IPC
+  WID --> CLI
   IPC --> SUP --> FX --> DEV --> USB["/dev/ttyUSB0"]
   SUP --> CAP --> DEV
   PORTAL --> PW --> SAMP --> CAP
   AUD -->|brightness & tempo| FX
 ```
 
-One process owns the device. TUI and tray are thin IPC clients; legacy subcommands (`solid`, `screen`, …) patch the running daemon when it is already up.
+One process owns the device. TUI and tray are thin IPC clients and the Plasma widget drives the daemon through `hyper-sync ctl`; legacy subcommands (`solid`, `screen`, …) patch the running daemon when it is already up.
 
 ## Features
 
@@ -63,7 +65,7 @@ One process owns the device. TUI and tray are thin IPC clients; legacy subcomman
 
 - Background **daemon** with hot config reload (`inotify` on `~/.config/hyper-sync/config.toml`): every setting applies live (except the `[device]` section, which needs a daemon restart), also from editors that save by renaming
 - **Unix socket IPC** — `$XDG_RUNTIME_DIR/hyper-sync.sock`, answered at once
-- **`hyper-sync ctl`** — status (plain/JSON), stop, restart, quit, reselect screen, flash, patch settings; invalid values are rejected with a message
+- **`hyper-sync ctl`** — status (plain/JSON), effect list, favorites, stop, restart, quit, reselect screen, flash, patch settings; invalid values are rejected with a message
 - **Serial reconnect** on USB unplug/replug; a stopped effect is retried every 2 s and `serial_ok` reports a missing strip
 - LEDs go dark while the screen is locked
 - **`hyper-sync install app|service`** — session autostart or systemd user unit
@@ -201,9 +203,23 @@ Interactive panel (`hyper-sync tui`) — **`q`** detaches, daemon keeps running.
 
 ### System tray
 
-The icon is the monitor with the strip's glow behind it, greyed while the lights are off. **Click** turns the lights off and back on (to the last effect), **scroll** changes brightness in 5% steps, **middle-click** opens the control panel (TUI).
+On KDE Plasma the [Plasma widget](#plasma-widget-kde) takes the tray icon's place once it's installed; elsewhere, the icon is the monitor with the strip's glow behind it, greyed while the lights are off. **Click** turns the lights off and back on (to the last effect), **scroll** changes brightness in 5% steps, **middle-click** opens the control panel (TUI).
 
 The right-click menu is built from the live settings: a status line, a *Lights on* checkmark, then **Favorites** (Off plus the TUI's favorites), **Effect** (every effect by group), **Color** (with swatches), and Brightness, Speed, Power, Frame rate, **Sound** (mode, reaction, sensitivity, smoothing) and **Screen sync** (gamma, smoothing, choose another screen). Each submenu shows its current value and marks it inside; changes made in the TUI or `config.toml` show up within a second. Then: open control panel, edit settings file, restart effect, quit.
+
+### Plasma widget (KDE)
+
+![The Plasma widget's popup: the strip preview, controls, stats and the effect list](docs/media/plasma-widget.png)
+
+<sub>Rendered from the widget's QML (offscreen) with the colors and stats of an isolated daemon running Aurora (`driver = "none"`).</sub>
+
+A System Tray widget that sits next to Brightness and Color and opens the TUI's layout as a popup: the strip around a screen on top (live colors and glow, every 5th LED numbered, effect and frame rate inside), then **controls** and **stats** beside the **effect list** (stacked in a narrow popup). The header has the *Lights* switch, **Restart**, **Control Panel** and the settings file (and **Choose Screen…** during screen sync).
+
+Controls: brightness, speed, strength, frame rate, color (presets plus a hue slider, the TUI's dial), candle warmth, screen-sync gamma and smoothing, sound mode with reaction, sensitivity, smoothing and a live spectrum. Only the ones the current effect uses are shown (the TUI dims the rest). Stats: frame rate and uptime, estimated LED current now and peak, strip and port, capture size, config file. Effects: Off and the favorites, then each group, numbered as in the TUI, with `H` on the Hyperion ports; ★ pins or unpins a favorite.
+
+Its tray icon is the app icon, greyed while the lights are off. **Click** opens the popup, **middle-click** the control panel (TUI), **right-click** a menu (lights on, control panel, settings file, restart effect, quit). It drives the daemon through `hyper-sync ctl` and offers to start it when it isn't running.
+
+`scripts/build.sh` installs it (`kpackagetool6`) and the System Tray turns it on by itself the next time plasmashell starts (**System Tray Settings → Entries → hyper-sync** to show or hide it). With the widget installed, the daemon skips the tray icon above on KDE, so hyper-sync has one entry. After changing the widget's QML, restart plasmashell to load it: `systemctl --user restart plasma-plasmashell`.
 
 ## Requirements
 
@@ -213,6 +229,7 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 - For **screen** mode: `pipewire-devel`, `gcc` (bindgen), portal screencast permission
 - For **audio**: `parec` (PipeWire)
 - For lights-off on lock: `gdbus` (glib2); for "edit settings": `xdg-open` or `$EDITOR`
+- For the **Plasma widget**: KDE Plasma 6 (`kpackagetool6`, `kstart`; Konsole for its control panel button)
 - Only to regenerate assets: ImageMagick (icon from `assets/hyper-sync.svg`), ffmpeg (Hyperion GIF frames); for the README media also tmux and Python 3 with Pillow (`scripts/demo/`)
 
 ## Build
@@ -224,7 +241,8 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 Builds once with all features (`screen`, `daemon`, `tui`, `tray`), pinned to `Cargo.lock` (`--locked`), and installs to:
 
 - `~/.cargo/bin/hyper-sync` and `~/.local/bin/hyper-sync` (the same binary)
-- App icon: `~/.local/share/icons/hicolor/{scalable,256x256}/apps/hyper-sync.*` (for the menu and autostart entries; the tray has it built in)
+- App icon: `~/.local/share/icons/hicolor/{scalable,256x256}/apps/hyper-sync.*` (for the menu, the autostart entries and the Plasma widget; the tray has it built in)
+- KDE Plasma: the System Tray widget, to `~/.local/share/plasma/plasmoids/io.github.ouzx.hypersync/`
 
 On Fedora, `scripts/build.sh` sets `BINDGEN_EXTRA_CLANG_ARGS` for system headers.
 
@@ -259,7 +277,7 @@ You can also run `hyper-sync daemon` manually without either.
 ## Quick start
 
 ```bash
-# Start daemon (tray icon on KDE)
+# Start daemon (tray icon; on KDE the Plasma widget, when installed)
 hyper-sync daemon
 
 # Headless
@@ -345,10 +363,13 @@ Index 48–64:  left edge, top → bottom
 hyper-sync daemon [--no-tray]
 hyper-sync tui
 hyper-sync ctl status [--json]
+hyper-sync ctl effects                     # id, label, group, flags (favorite,hyperion,speed,power,color), tab-separated
+hyper-sync ctl favorite aurora             # pin to the TUI's favorites, or unpin
 hyper-sync ctl stop | restart | quit | reselect-screen
 hyper-sync ctl flash 00ff00 [--count 3]
 hyper-sync ctl set --mode screen --brightness 0.2 --fps 30 --speed 1.5 --color ff3300
 hyper-sync ctl set --warmth 0.8 --gamma 2.0 --power 0.4 --smoothing 0.3 --audio-smoothing 0.2
+hyper-sync ctl set --sound-mode off | level | balance --reactivity 0.5 --sensitivity 0.3
 hyper-sync install app | service
 hyper-sync uninstall app | service
 ```
@@ -369,7 +390,7 @@ hyper-sync off
 
 First run opens KDE's screen picker. Click your monitor's tile (not **Share region** or **Share virtual screen** — the resolution there only applies to a new, empty virtual display) and keep **Allow the application to do this without asking next time** ticked. The picker closes itself after 30 s; the daemon then opens it again a few seconds later, up to 12 times.
 
-Press **`R`** in the TUI (or tray **Screen sync → Choose another screen…**) to clear the saved permission and pick again; the new pick is remembered. Switching away while screen sync is starting keeps the saved permission and closes the half-open session. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
+Press **`R`** in the TUI (or tray **Screen sync → Choose another screen…**, or **Choose Screen…** in the Plasma widget) to clear the saved permission and pick again; the new pick is remembered. Switching away while screen sync is starting keeps the saved permission and closes the half-open session. Revoke in KDE: **Settings → Privacy → Screen Sharing**.
 
 ## Protocol
 
@@ -386,7 +407,7 @@ Total: **201 bytes** per frame.
 
 ## Adding a device
 
-Effects and screen sync hand every frame to a [`Device`](src/device/mod.rs): R,G,B per LED in strip order, with brightness, gamma, sound and flash already applied. A device only has to get that frame onto its LEDs, so a new one touches nothing else (effects, daemon, TUI, tray):
+Effects and screen sync hand every frame to a [`Device`](src/device/mod.rs): R,G,B per LED in strip order, with brightness, gamma, sound and flash already applied. A device only has to get that frame onto its LEDs, so a new one touches nothing else (effects, daemon, TUI, tray, Plasma widget):
 
 1. `src/device/<name>.rs`: a type that implements `Device::show(&mut self, rgb: &[u8])`. [`skydimo.rs`](src/device/skydimo.rs) is the example; a serial device can reuse `SerialWriter`, which reopens the port after an unplug.
 2. A variant in `Driver` and its line in `device::open` ([`src/device/mod.rs`](src/device/mod.rs)).
@@ -401,6 +422,7 @@ Limits today: up to 255 LEDs (`leds` is a byte), 55 fps, and the effects draw on
 | Metric | Target |
 |--------|--------|
 | Update rate | The set rate is held up to 55 fps, a little under the ~57 the serial line carries at 115200 (writes no longer wait for the wire, so a faster rate would queue frames as lag): measured 45.0 at 45 and 55.1 at 55, for effects and screen sync. The frame loop sleeps only what's left of each interval. |
+| Plasma widget | Runs `hyper-sync ctl status` (~2 ms) 8 times a second while its popup is open, for the live preview, and every 2 s otherwise |
 | CPU | Daemon ~0.8% of one core running an effect at 55 fps with a sound mode on and nothing playing (`parec` adds ~0.9%); ~2% in screen sync on a mostly still desktop, where KWin adds ~5% to produce the frames. 13 threads. TUI ~0.3% idle |
 | Screen lag | One serial frame (~17 ms) plus up to one frame interval; screen smoothing adds its fade on top |
 | Sound lag | ~30–45 ms from sound to light (estimated from the buffer sizes: ~5 ms PipeWire cycle, fast-attack envelope, frame wait, 17 ms serial) |
@@ -419,6 +441,7 @@ Limits today: up to 255 LEDs (`leds` is a byte), 55 fps, and the effects draw on
 | + | Frame pacing, audio spectrum fix, gamma, Hyperion ports, favorites, stats panel, live tray menu, new icon | Done |
 | + | Review: screen-permission and capture-handoff fixes, less CPU and fewer threads, one pinned build, warning-free code | Done |
 | + | Device drivers behind one trait (`skydimo`, `none`), README demo media | Done |
+| + | KDE Plasma widget with the TUI's layout; `ctl effects` flags, `ctl favorite`, sound flags for `ctl set` | Done |
 
 ## License
 

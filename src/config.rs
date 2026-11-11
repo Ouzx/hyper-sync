@@ -37,8 +37,8 @@ pub fn runtime_config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-/// Favorite effect ids, one per line (written by the TUI, read by the tray menu too).
-#[cfg(any(feature = "tui", feature = "tray"))]
+/// Favorite effect ids, one per line (written by the TUI, read by the tray menu and `ctl effects` too).
+#[cfg(feature = "daemon")]
 pub fn favorites_path() -> PathBuf {
     config_dir().join("favorites")
 }

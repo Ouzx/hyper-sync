@@ -17,6 +17,16 @@ use crate::effects::CATALOG;
 
 static ICON_PNG: &[u8] = include_bytes!("../../assets/hyper-sync.png");
 
+/// On KDE Plasma the System Tray widget (`plasmoid/`) is hyper-sync's tray entry, since only a
+/// widget can open a popup on click; with it installed this icon would be a second entry.
+pub fn plasma_widget_installed() -> bool {
+    let data = std::env::var("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| std::path::Path::new(&h).join(".local/share")));
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.contains("KDE"))
+        && data.is_ok_and(|d| d.join("plasma/plasmoids/io.github.ouzx.hypersync").exists())
+}
+
 pub fn run(config: Arc<RwLock<RuntimeConfig>>) -> anyhow::Result<()> {
     let icon = image::load_from_memory(ICON_PNG)?.to_rgba8();
     let mode = config.read().unwrap().effect.mode;
@@ -322,7 +332,9 @@ fn spawn_tui_in_terminal() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let exe = exe.to_string_lossy().into_owned();
+    // After a reinstall the running binary is unlinked and Linux reports "<path> (deleted)";
+    // the new binary sits at <path>.
+    let exe = exe.to_string_lossy().trim_end_matches(" (deleted)").to_owned();
 
     let try_spawn = |cmd: &mut Command| -> bool {
         cmd.stdin(Stdio::null())

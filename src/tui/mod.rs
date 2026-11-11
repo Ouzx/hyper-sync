@@ -20,6 +20,7 @@ use crate::effects::solid::{hsv_to_rgb, is_rainbow_color, parse_color, rgb_to_he
 use crate::layout::segment_bounds;
 
 use crate::effects::CATALOG as MODES;
+use crate::effects::{is_screen_sync, uses_accent_color, uses_power, uses_speed};
 const SOUND_MODES: &[&str] = &["off", "level", "balance"];
 const COLOR_PRESETS: &[&str] = &[
     "ff3300", "ff0000", "ffffff", "0099ff", "00ff88", "ff00ff", "ffff00", "rainbow",
@@ -404,27 +405,6 @@ fn fps_index(fps: u32) -> usize {
 
 fn sound_on(st: &DaemonStatus) -> bool {
     st.sound_mode != "off"
-}
-
-fn is_screen_sync(mode: &str) -> bool {
-    mode == "screen" || mode == "screen_center"
-}
-
-fn uses_speed(effect: &str) -> bool {
-    !matches!(effect, "off" | "solid" | "sound_viz" | "light_clock") && !is_screen_sync(effect)
-}
-
-/// Power only shapes our own effects; the Hyperion ports stay as their scripts draw them.
-fn uses_power(effect: &str) -> bool {
-    matches!(effect, "candle" | "fire" | "lava" | "aurora" | "pulse" | "wave" | "chase" | "scanner" | "sparkle" | "lightning" | "segment")
-}
-
-fn uses_accent_color(effect: &str) -> bool {
-    matches!(
-        effect,
-        "solid" | "candle" | "lava" | "aurora" | "pulse" | "wave" | "chase" | "scanner" | "sparkle" | "lightning" | "segment" | "sound_viz"
-            | "mood_blobs" | "swirl" | "snake" | "knight_rider" | "sparks" | "trails"
-    )
 }
 
 fn cycle_color(state: &mut UiState, dir: i32) {

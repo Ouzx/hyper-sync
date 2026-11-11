@@ -46,6 +46,9 @@ pub struct DaemonStatus {
     /// When the daemon started, in Unix seconds.
     #[serde(default)]
     pub started: u64,
+    /// The device's serial port (`[device] port`).
+    #[serde(default)]
+    pub port: String,
 }
 
 fn default_reactivity() -> f32 {
@@ -123,6 +126,7 @@ impl DaemonStatus {
             leds: String::new(),
             spectrum: Vec::new(),
             started: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+            port: cfg.device.port.clone(),
         }
     }
 }
