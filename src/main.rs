@@ -26,7 +26,7 @@ use anyhow::Context;
 use daemon::{daemon_running, ipc_request, patch_config, write_default_config_if_missing, IpcRequest, IpcResponse, Patch};
 
 #[derive(Parser)]
-#[command(name = "hyper-sync", about = "Low-latency Skydimo LED sync")]
+#[command(name = "hyper-sync", version, about = "Low-latency Skydimo LED sync")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
