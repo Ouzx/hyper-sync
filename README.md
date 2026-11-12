@@ -214,11 +214,11 @@ The right-click menu is built from the live settings: a status line, a *Lights o
 
 ![The Plasma widget's popup: the strip preview, controls, stats and the effect list](docs/media/plasma-widget.png)
 
-<sub>Rendered from the widget's QML (offscreen) with the colors and stats of an isolated daemon running Aurora (`driver = "none"`).</sub>
+<sub>Rendered from the widget's QML (offscreen) with the colors and stats of an isolated daemon running Aurora with sound on (`driver = "none"`).</sub>
 
 A System Tray widget that sits next to Brightness and Color and opens the TUI's layout as a popup: the strip around a screen on top (live colors and glow, every 5th LED numbered, effect and frame rate inside), then **controls** and **stats** beside the **effect list** (stacked in a narrow popup). The header has the *Lights* switch, **Restart**, **Control Panel** and the settings file (and **Choose Screen…** during screen sync).
 
-Controls: brightness, speed, strength, frame rate, color (presets plus a hue slider, the TUI's dial), candle warmth, screen-sync gamma and smoothing, sound mode with reaction, sensitivity, smoothing and a live spectrum. Only the ones the current effect uses are shown (the TUI dims the rest). Stats: frame rate and uptime, estimated LED current now and peak, strip and port, capture size, config file. Effects: Off and the favorites, then each group, numbered as in the TUI, with `H` on the Hyperion ports; ★ pins or unpins a favorite.
+Controls, grouped as in the TUI: light (brightness, frame rate), effect (speed, strength, color presets plus a hue slider, the TUI's dial, candle warmth), screen sync (gamma, smoothing) and sound (mode, one reaction slider that sets reaction and sensitivity together, smoothing, a live spectrum). Only the ones the current effect uses are shown (the TUI dims the rest). Stats: frame rate and uptime, estimated LED current now and peak, strip and port, capture size, config file. Effects: Off and the favorites, then each group, numbered as in the TUI, with `H` on the Hyperion ports; ★ pins or unpins a favorite.
 
 Its tray icon is the app icon, greyed while the lights are off. **Click** opens the popup, **middle-click** the control panel (TUI), **right-click** a menu (lights on, control panel, settings file, restart effect, quit). It drives the daemon through `hyper-sync ctl` and offers to start it when it isn't running.
 

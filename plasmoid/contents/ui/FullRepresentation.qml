@@ -144,6 +144,24 @@ PlasmaExtras.Representation {
         opacity: 0.7
     }
 
+    // A group of controls, like the TUI's "─ light" lines: a dim title, then a rule across the row.
+    component Group: RowLayout {
+        property alias text: heading.text
+        Layout.fillWidth: true
+        Layout.topMargin: Kirigami.Units.largeSpacing
+        Layout.bottomMargin: Kirigami.Units.smallSpacing
+        spacing: Kirigami.Units.largeSpacing
+
+        PlasmaComponents3.Label {
+            id: heading
+            font: Kirigami.Theme.smallFont
+            opacity: 0.6
+        }
+        Kirigami.Separator {
+            Layout.fillWidth: true
+        }
+    }
+
     Layout.minimumWidth: Kirigami.Units.gridUnit * 20
     Layout.minimumHeight: Kirigami.Units.gridUnit * 20
     Layout.preferredWidth: Kirigami.Units.gridUnit * 44
@@ -248,6 +266,10 @@ PlasmaExtras.Representation {
                         Panel {
                             title: "Controls"
 
+                            Group {
+                                text: "Light"
+                                Layout.topMargin: Kirigami.Units.smallSpacing
+                            }
                             Row {
                                 label: "Brightness"
                                 value: full.pct(root.st.brightness)
@@ -256,6 +278,20 @@ PlasmaExtras.Representation {
                                     from: 0
                                     to: 1
                                 }
+                            }
+                            Row {
+                                label: "Frame rate"
+                                Choice {
+                                    key: "fps"
+                                    options: [[24, "24"], [30, "30"], [45, "45"], [55, "55"]]
+                                }
+                                Item {
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            Group {
+                                visible: !!(full.effect.uses.speed || full.effect.uses.power || full.effect.uses.color) || root.st.effect === "candle"
+                                text: "Effect"
                             }
                             Row {
                                 visible: full.effect.uses.speed ?? false
@@ -275,16 +311,6 @@ PlasmaExtras.Representation {
                                     key: "power"
                                     from: 0
                                     to: 1
-                                }
-                            }
-                            Row {
-                                label: "Frame rate"
-                                Choice {
-                                    key: "fps"
-                                    options: [[24, "24"], [30, "30"], [45, "45"], [55, "55"]]
-                                }
-                                Item {
-                                    Layout.fillWidth: true
                                 }
                             }
                             Row {
@@ -356,6 +382,10 @@ PlasmaExtras.Representation {
                                     to: 1
                                 }
                             }
+                            Group {
+                                visible: full.screenSync
+                                text: "Screen sync"
+                            }
                             Row {
                                 visible: full.screenSync
                                 label: "Gamma"
@@ -368,7 +398,7 @@ PlasmaExtras.Representation {
                             }
                             Row {
                                 visible: full.screenSync
-                                label: "Screen smoothing"
+                                label: "Smoothing"
                                 value: full.ms(600 * (root.st.screen_smoothing ?? 0) ** 2)
                                 ValueSlider {
                                     key: "screen_smoothing"
@@ -376,8 +406,11 @@ PlasmaExtras.Representation {
                                     to: 1
                                 }
                             }
+                            Group {
+                                text: "Sound"
+                            }
                             Row {
-                                label: "Sound"
+                                label: "Mode"
                                 Choice {
                                     key: "sound_mode"
                                     options: [["off", "Off"], ["level", "Level"], ["balance", "Balance"]]
@@ -390,25 +423,17 @@ PlasmaExtras.Representation {
                                 visible: full.soundOn
                                 label: "Reaction"
                                 value: full.pct(root.st.reactivity)
+                                // One knob for both: reactivity and sensitivity always move together here.
                                 ValueSlider {
                                     key: "reactivity"
                                     from: 0
                                     to: 1
+                                    onMoved: root.set("sensitivity", Math.round(value * 100) / 100)
                                 }
                             }
                             Row {
                                 visible: full.soundOn
-                                label: "Sensitivity"
-                                value: full.pct(root.st.sensitivity)
-                                ValueSlider {
-                                    key: "sensitivity"
-                                    from: 0
-                                    to: 1
-                                }
-                            }
-                            Row {
-                                visible: full.soundOn
-                                label: "Sound smoothing"
+                                label: "Smoothing"
                                 value: full.ms(50 + 550 * (root.st.audio_smoothing ?? 0))
                                 ValueSlider {
                                     key: "audio_smoothing"
